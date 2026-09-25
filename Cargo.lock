@@ -66,6 +66,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "better-commerce-example",
+ "better-commerce-example-consumer",
  "http",
  "semver",
  "serde",
@@ -81,6 +82,10 @@ version = "0.1.0"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "better-commerce-example-consumer"
+version = "0.1.0"
 
 [[package]]
 name = "bytes"

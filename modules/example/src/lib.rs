@@ -15,4 +15,9 @@ impl ExampleModule {
     pub fn new(configuration: ExampleConfiguration) -> Self {
         Self { configuration }
     }
+
+    /// Published application API used by a consumer-owned local adapter.
+    pub fn label(&self) -> &str {
+        &self.configuration.label
+    }
 }

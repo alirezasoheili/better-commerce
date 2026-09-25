@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use better_commerce_example::ExampleModule;
+use better_commerce_example_consumer::{ExampleLabelPort, read_example_label};
 
 use crate::manifest::{ManifestError, ValidatedManifest};
 
@@ -42,6 +43,24 @@ pub fn compose_modules(manifest: ValidatedManifest) -> Result<Composition, Manif
     Ok(Composition { modules })
 }
 
+struct LocalExampleAdapter(ExampleModule);
+
+impl ExampleLabelPort for LocalExampleAdapter {
+    fn read_label(&self) -> String {
+        self.0.label().to_owned()
+    }
+}
+
+impl Composition {
+    /// Invoke the consumer through the local adapter composed for the example module.
+    pub fn read_example_label(&self) -> Option<String> {
+        self.module("example")
+            .map(|ComposedModule::Example(module)| {
+                read_example_label(&LocalExampleAdapter(module.clone()))
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ComposedModule, compose_modules};
@@ -75,5 +94,30 @@ mod tests {
         let manifest = parse_and_validate(source, &supported_release_metadata()).unwrap();
         let composition = compose_modules(manifest).unwrap();
         assert_eq!(composition.enabled_module_ids().count(), 0);
+    }
+
+    #[test]
+    fn consumer_port_use_case_works_with_a_substitute_adapter() {
+        struct SubstituteExampleAdapter;
+
+        impl better_commerce_example_consumer::ExampleLabelPort for SubstituteExampleAdapter {
+            fn read_label(&self) -> String {
+                "Substitute".into()
+            }
+        }
+
+        assert_eq!(
+            better_commerce_example_consumer::read_example_label(&SubstituteExampleAdapter),
+            "Substitute"
+        );
+    }
+
+    #[test]
+    fn consumer_port_use_case_works_with_the_composed_local_adapter() {
+        let source = "release: 0.1.0\ndeployment_mode: self_hosted\nmodules:\n  example:\n    version: 0.1.0\n    configuration:\n      label: Demo\n";
+        let manifest = parse_and_validate(source, &supported_release_metadata()).unwrap();
+        let composition = compose_modules(manifest).unwrap();
+
+        assert_eq!(composition.read_example_label(), Some("Demo".to_owned()));
     }
 }
