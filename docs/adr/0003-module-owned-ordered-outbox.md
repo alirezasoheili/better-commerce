@@ -1,0 +1,3 @@
+# Module-owned ordered outbox
+
+A module writes a versioned JSONB event and its state change in one PostgreSQL transaction, with the outbox record in its own schema so pending events can move with the module. A shared PostgreSQL-backed dispatcher leases eligible events and delivers them at least once through an `EventDelivery` port, marking an event published only after that boundary acknowledges acceptance; downstream consumers own their own retries and idempotency. Different aggregates may advance concurrently, but events from one aggregate advance in sequence, with no global ordering guarantee. A failed or dead-lettered event blocks later events for its aggregate until explicit, auditable operator action.

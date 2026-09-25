@@ -1,0 +1,3 @@
+# Installation isolation and reconciliation
+
+Each merchant installation has one logical PostgreSQL database, with separate schemas owned by its modules; physical database servers may be shared. `manifest.yaml` declares the Better Commerce release, enabled modules, deployment mode, and configuration, while a caller-independent reconciler validates and applies that desired state, runs owned migrations, and verifies readiness. The server validates resolved configuration and composes bundled modules at startup; manifest absence never authorizes destruction of initialized module state, so removal is rejected until an explicit lifecycle exists. This gives self-hosted and operated installs the same lifecycle without requiring runtime plugin activation.

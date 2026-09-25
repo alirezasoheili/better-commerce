@@ -1,0 +1,3 @@
+# Module ownership and extraction seam
+
+Each bounded-context module starts as one Rust crate with private domain, application, and infrastructure layers, and owns its PostgreSQL schema, migrations, migration history, and scoped runtime identity. A consuming application defines the smallest Rust port it needs; composition supplies a local adapter to the provider's published application API, and a future remote adapter implements that same port without changing the consumer. Modules never query another module's schema, transport DTOs stay outside domain/application code, and the dispatcher receives only narrow access to module outboxes. These boundaries make extraction possible while preserving database ownership inside the monolith.
