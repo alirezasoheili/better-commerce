@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     Extension, Json, Router,
     extract::Request,
@@ -8,12 +10,13 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::context::RequestContext;
+use crate::{composition::Composition, context::RequestContext};
 
-pub fn router() -> Router {
+pub fn router(composition: Composition) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .fallback(not_found)
+        .layer(Extension(Arc::new(composition)))
         .layer(middleware::from_fn(provide_anonymous_context))
 }
 
@@ -25,7 +28,10 @@ async fn provide_anonymous_context(mut request: Request, next: Next) -> Response
     next.run(request).await
 }
 
-async fn healthz(Extension(_context): Extension<RequestContext>) -> Json<HealthResponse> {
+async fn healthz(
+    Extension(_context): Extension<RequestContext>,
+    Extension(_composition): Extension<Arc<Composition>>,
+) -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 

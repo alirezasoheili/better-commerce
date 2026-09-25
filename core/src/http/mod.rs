@@ -1,6 +1,19 @@
 mod routes;
 
+#[cfg(test)]
+use crate::{
+    composition::{Composition, compose_modules},
+    manifest::{parse_and_validate, supported_release_metadata},
+};
+
 pub use routes::router;
+
+#[cfg(test)]
+fn test_composition() -> Composition {
+    let source = "release: 0.1.0\ndeployment_mode: self_hosted\nmodules: {}\n";
+    let manifest = parse_and_validate(source, &supported_release_metadata()).unwrap();
+    compose_modules(manifest).unwrap()
+}
 
 #[cfg(test)]
 mod tests {
@@ -9,7 +22,7 @@ mod tests {
 
     #[tokio::test]
     async fn healthz_returns_success_without_external_dependencies() {
-        let response = super::router()
+        let response = super::router(super::test_composition())
             .oneshot(
                 Request::builder()
                     .uri("/healthz")
@@ -35,7 +48,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_path_uses_json_error_envelope() {
-        let response = super::router()
+        let response = super::router(super::test_composition())
             .oneshot(
                 Request::builder()
                     .uri("/unsupported")
