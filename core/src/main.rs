@@ -2,6 +2,7 @@ use tokio::net::TcpListener;
 
 use better_commerce_core::{
     composition::compose_modules,
+    database::ReadinessDatabase,
     manifest::{parse_and_validate, supported_release_metadata},
 };
 
@@ -10,7 +11,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_path = std::env::var("MANIFEST_PATH").unwrap_or_else(|_| "manifest.yaml".into());
     let manifest_source = std::fs::read_to_string(&manifest_path)?;
     let manifest = parse_and_validate(&manifest_source, &supported_release_metadata())?;
-    let composition = compose_modules(manifest)?;
+    let mut composition = compose_modules(manifest)?;
+    if composition.module("example").is_some() {
+        composition
+            .attach_example_database(&std::env::var("EXAMPLE_RUNTIME_DATABASE_URL")?)
+            .await?;
+    }
+    let readiness = ReadinessDatabase::connect(&std::env::var("READINESS_DATABASE_URL")?).await?;
 
     let port = std::env::var("PORT")
         .ok()
@@ -18,6 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(3000);
     let listener = TcpListener::bind(("0.0.0.0", port)).await?;
 
-    axum::serve(listener, better_commerce_core::http::router(composition)).await?;
+    axum::serve(
+        listener,
+        better_commerce_core::http::router_with_readiness(composition, Some(readiness)),
+    )
+    .await?;
     Ok(())
 }

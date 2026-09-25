@@ -15,6 +15,10 @@ semver.workspace = true
 tokio.workspace = true
 better-commerce-example = { path = "../modules/example" }
 better-commerce-example-consumer = { path = "../modules/example-consumer" }
+sqlx.workspace = true
+url = "2"
+percent-encoding = "2"
+sha2 = "0.10"
 
 [dev-dependencies]
 tower.workspace = true

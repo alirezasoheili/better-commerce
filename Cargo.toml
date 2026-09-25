@@ -16,6 +16,7 @@ serde_yaml = "0.9"
 semver = { version = "1", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
