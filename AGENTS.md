@@ -53,3 +53,5 @@ Use the default triage labels for this repository. See `docs/agents/triage-label
 ### Domain docs
 
 Single-context: use the root `CONTEXT.md` glossary, `docs/context-map.yaml` for task-specific document routing, and `docs/adr/` for system decisions. See `docs/agents/domain.md`.
+
+Follow the ticket completion workflow in `docs/agents/issue-tracker.md`.
