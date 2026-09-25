@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "modules/example"]
+members = ["core", "modules/example", "modules/example-consumer"]
 resolver = "2"
 
 [workspace.package]
