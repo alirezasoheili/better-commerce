@@ -10,7 +10,10 @@ axum.workspace = true
 http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
+semver.workspace = true
 tokio.workspace = true
+better-commerce-example = { path = "../modules/example" }
 
 [dev-dependencies]
 tower.workspace = true
