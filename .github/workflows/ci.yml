@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo fmt --workspace -- --check
+      - run: cargo fmt --all -- --check
 
   check:
     name: Workspace check
