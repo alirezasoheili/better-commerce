@@ -10,12 +10,21 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{composition::Composition, context::RequestContext};
+use crate::{composition::Composition, context::RequestContext, database::ReadinessDatabase};
 
 pub fn router(composition: Composition) -> Router {
+    router_with_readiness(composition, None)
+}
+
+pub fn router_with_readiness(
+    composition: Composition,
+    readiness: Option<ReadinessDatabase>,
+) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .fallback(not_found)
+        .layer(Extension(Arc::new(readiness)))
         .layer(Extension(Arc::new(composition)))
         .layer(middleware::from_fn(provide_anonymous_context))
 }
@@ -33,6 +42,28 @@ async fn healthz(
     Extension(_composition): Extension<Arc<Composition>>,
 ) -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+async fn readyz(
+    Extension(_context): Extension<RequestContext>,
+    Extension(composition): Extension<Arc<Composition>>,
+    Extension(readiness): Extension<Arc<Option<ReadinessDatabase>>>,
+) -> Response {
+    if let Some(database) = readiness.as_ref() {
+        if database.is_ready().await && composition.modules_are_ready().await {
+            return (StatusCode::OK, Json(HealthResponse { status: "ok" })).into_response();
+        }
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorEnvelope {
+            error: ApiError {
+                code: "not_ready",
+                message: "Database prerequisites are not ready.",
+            },
+        }),
+    )
+        .into_response()
 }
 
 async fn not_found() -> impl IntoResponse {

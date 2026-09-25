@@ -35,6 +35,21 @@ jobs:
   test:
     name: Workspace tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test_only_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 1s
+          --health-timeout 1s
+          --health-retries 30
+    env:
+      BC_TEST_ADMIN_DATABASE_URL: postgres://postgres:test_only_password@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1

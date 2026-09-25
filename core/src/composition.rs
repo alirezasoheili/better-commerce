@@ -1,16 +1,17 @@
 use std::collections::BTreeMap;
 
 use better_commerce_example::ExampleModule;
+use better_commerce_example::database::ExampleDatabase;
 use better_commerce_example_consumer::{ExampleLabelPort, read_example_label};
 
 use crate::manifest::{ManifestError, ValidatedManifest};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum ComposedModule {
     Example(ExampleModule),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Composition {
     modules: BTreeMap<String, ComposedModule>,
 }
@@ -22,6 +23,33 @@ impl Composition {
 
     pub fn module(&self, module_id: &str) -> Option<&ComposedModule> {
         self.modules.get(module_id)
+    }
+
+    pub async fn attach_example_database(&mut self, database_url: &str) -> Result<(), sqlx::Error> {
+        if let Some(ComposedModule::Example(module)) = self.modules.get_mut("example") {
+            module.attach_database(ExampleDatabase::connect(database_url).await?);
+        }
+        Ok(())
+    }
+
+    pub async fn modules_are_ready(&self) -> bool {
+        for module in self.modules.values() {
+            match module {
+                ComposedModule::Example(example) if !example.database_is_ready().await => {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
+    pub async fn close_databases(&self) {
+        for module in self.modules.values() {
+            match module {
+                ComposedModule::Example(example) => example.close_database().await,
+            }
+        }
     }
 }
 
@@ -65,7 +93,6 @@ impl Composition {
 mod tests {
     use super::{ComposedModule, compose_modules};
     use crate::manifest::{parse_and_validate, supported_release_metadata};
-    use better_commerce_example::ExampleModule;
 
     #[test]
     fn module_composition_contains_only_enabled_modules_and_resolved_configuration() {
@@ -77,13 +104,8 @@ mod tests {
             composition.enabled_module_ids().collect::<Vec<_>>(),
             ["example"]
         );
-        assert_eq!(
-            composition.module("example"),
-            Some(&ComposedModule::Example(ExampleModule::new(
-                better_commerce_example::ExampleConfiguration {
-                    label: "Demo".into()
-                }
-            )))
+        assert!(
+            matches!(composition.module("example"), Some(ComposedModule::Example(module)) if module.label() == "Demo")
         );
         assert!(composition.module("disabled-module").is_none());
     }

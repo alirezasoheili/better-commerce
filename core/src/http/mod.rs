@@ -6,7 +6,7 @@ use crate::{
     manifest::{parse_and_validate, supported_release_metadata},
 };
 
-pub use routes::router;
+pub use routes::{router, router_with_readiness};
 
 #[cfg(test)]
 fn test_composition() -> Composition {
