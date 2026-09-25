@@ -39,3 +39,17 @@ stop and surface the conflict rather than silently redesigning the system.
 
 Run the smallest relevant test set during development.
 Run required package/workspace checks before completion.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues; use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default triage labels for this repository. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: use the root `CONTEXT.md` glossary, `docs/context-map.yaml` for task-specific document routing, and `docs/adr/` for system decisions. See `docs/agents/domain.md`.
