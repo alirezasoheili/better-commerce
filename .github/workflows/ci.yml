@@ -8,6 +8,31 @@ permissions:
   contents: read
 
 jobs:
+  contract-governance:
+    name: Protobuf contract governance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: bufbuild/buf-setup-action@v1.50.0
+        with:
+          version: 1.73.0
+      - run: cargo install protoc-gen-prost --version 0.5.0 --locked
+      - name: Buf lint
+        working-directory: contracts
+        run: buf lint
+      - name: Buf breaking check against checked-in baseline
+        working-directory: contracts
+        run: buf breaking proto --against baseline
+      - name: Verify generated Rust is current
+        working-directory: contracts
+        run: |
+          buf generate
+          git -C .. diff --exit-code -- modules/example-transport/src/generated
+          test -z "$(git -C .. ls-files --others --exclude-standard -- modules/example-transport/src/generated)"
+      - name: Enforce transport boundary
+        run: python3 scripts/check_transport_boundary.py
+
   format:
     name: Format
     runs-on: ubuntu-latest

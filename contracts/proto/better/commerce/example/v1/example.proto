@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package better.commerce.example.v1;
+
+service ExampleLabelService {
+  rpc ReadLabel(ReadLabelRequest) returns (ReadLabelResponse);
+}
+
+message ReadLabelRequest {}
+
+message ReadLabelResponse {
+  string label = 1;
+}
