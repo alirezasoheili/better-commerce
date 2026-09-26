@@ -11,6 +11,9 @@ use axum::{
 use better_commerce_core::{
     composition::compose_modules,
     database::{ReadinessDatabase, migrate_installation, scoped_role_names},
+    dispatcher::{
+        DispatchOutcome, EventDelivery, InProcessEventDelivery, PostgresOutboxDispatcher,
+    },
     http::router_with_readiness,
     manifest::{parse_and_validate, supported_release_metadata},
 };
@@ -427,6 +430,207 @@ async fn dispatcher_permissions_are_limited_to_the_example_outbox() -> TestResul
             Some("42501")
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_delivery_acceptance_marks_event_delivered() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let composition = composition(&fixture.example_url).await?;
+    composition
+        .create_example_record("delivery accepted".into())
+        .await
+        .expect("example module is composed")
+        .expect("example command succeeds");
+    let dispatcher = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let delivery = InProcessEventDelivery::default();
+    let outcome = dispatcher.dispatch_one("dispatcher-one", &delivery).await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    let row: (i16, i16, serde_json::Value, Option<String>, i32) = sqlx::query_as(
+        "SELECT event_version, payload_schema_version, payload, delivered_at::text, attempt_count \
+         FROM bc_example.outbox_events",
+    )
+    .fetch_one(&operations)
+    .await?;
+    let accepted = delivery.accepted_event_ids();
+    dispatcher.close().await;
+    operations.close().await;
+    composition.close_databases().await;
+    fixture.cleanup().await?;
+    assert!(matches!(outcome, DispatchOutcome::Delivered { .. }));
+    assert_eq!(row.0, 1);
+    assert_eq!(row.1, 1);
+    assert_eq!(row.2["schema_version"], 1);
+    assert!(row.3.is_some());
+    assert_eq!(row.4, 1);
+    assert_eq!(accepted.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_retry_rejected_delivery_remains_unresolved_then_succeeds() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let composition = composition(&fixture.example_url).await?;
+    composition
+        .create_example_record("delivery retry".into())
+        .await
+        .expect("example module is composed")
+        .expect("example command succeeds");
+    let dispatcher = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let delivery = InProcessEventDelivery::default();
+    delivery.reject_next(1);
+    let rejected = dispatcher.dispatch_one("dispatcher-one", &delivery).await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    let after_rejection: (Option<String>, i32) =
+        sqlx::query_as("SELECT delivered_at::text, attempt_count FROM bc_example.outbox_events")
+            .fetch_one(&operations)
+            .await?;
+    let succeeded = dispatcher.dispatch_one("dispatcher-one", &delivery).await?;
+    let delivered_at: (Option<String>, i32) =
+        sqlx::query_as("SELECT delivered_at::text, attempt_count FROM bc_example.outbox_events")
+            .fetch_one(&operations)
+            .await?;
+    dispatcher.close().await;
+    operations.close().await;
+    composition.close_databases().await;
+    fixture.cleanup().await?;
+    assert!(matches!(rejected, DispatchOutcome::Rejected { .. }));
+    assert!(after_rejection.0.is_none());
+    assert_eq!(after_rejection.1, 1);
+    assert!(matches!(succeeded, DispatchOutcome::Delivered { .. }));
+    assert!(delivered_at.0.is_some());
+    assert_eq!(delivered_at.1, 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_retry_abandoned_lease_can_be_reclaimed() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let composition = composition(&fixture.example_url).await?;
+    composition
+        .create_example_record("abandoned lease".into())
+        .await
+        .expect("example module is composed")
+        .expect("example command succeeds");
+    let dispatcher = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let first_claim = dispatcher.claim_next("dispatcher-one").await?.unwrap();
+    assert!(dispatcher.claim_next("dispatcher-two").await?.is_none());
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "UPDATE bc_example.outbox_events SET claim_until = clock_timestamp() - interval '1 second' \
+         WHERE event_id = $1::uuid",
+    )
+    .bind(&first_claim.request.event_id)
+    .execute(&operations)
+    .await?;
+    let reclaimed = dispatcher.claim_next("dispatcher-two").await?.unwrap();
+    let delivery = InProcessEventDelivery::default();
+    delivery.deliver(reclaimed.request.clone()).await?;
+    assert!(dispatcher.acknowledge(&reclaimed).await?);
+    let attempts: (i32, Option<String>) = sqlx::query_as(
+        "SELECT attempt_count, delivered_at::text FROM bc_example.outbox_events WHERE event_id = $1::uuid",
+    )
+    .bind(&first_claim.request.event_id)
+    .fetch_one(&operations)
+    .await?;
+    dispatcher.close().await;
+    operations.close().await;
+    composition.close_databases().await;
+    fixture.cleanup().await?;
+    assert_eq!(attempts.0, 2);
+    assert!(attempts.1.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_delivery_lost_ack_causes_tolerated_duplicate() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let composition = composition(&fixture.example_url).await?;
+    composition
+        .create_example_record("lost acknowledgement".into())
+        .await
+        .expect("example module is composed")
+        .expect("example command succeeds");
+    let dispatcher = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let delivery = InProcessEventDelivery::default();
+    let accepted_before_lost_ack = dispatcher.claim_next("dispatcher-one").await?.unwrap();
+    delivery
+        .deliver(accepted_before_lost_ack.request.clone())
+        .await?;
+    // Simulate process loss after acceptance: deliberately do not call acknowledge.
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "UPDATE bc_example.outbox_events SET claim_until = clock_timestamp() - interval '1 second' \
+         WHERE event_id = $1::uuid",
+    )
+    .bind(&accepted_before_lost_ack.request.event_id)
+    .execute(&operations)
+    .await?;
+    let retry = dispatcher.claim_next("dispatcher-two").await?.unwrap();
+    delivery.deliver(retry.request.clone()).await?;
+    assert!(dispatcher.acknowledge(&retry).await?);
+    let attempts: (i32, Option<String>) = sqlx::query_as(
+        "SELECT attempt_count, delivered_at::text FROM bc_example.outbox_events WHERE event_id = $1::uuid",
+    )
+    .bind(&retry.request.event_id)
+    .fetch_one(&operations)
+    .await?;
+    let accepted_ids = delivery.accepted_event_ids();
+    let delivery_attempts = delivery.attempts_for(&retry.request.event_id);
+    dispatcher.close().await;
+    operations.close().await;
+    composition.close_databases().await;
+    fixture.cleanup().await?;
+    assert_eq!(delivery_attempts, 2);
+    assert_eq!(accepted_ids.len(), 1);
+    assert_eq!(attempts.0, 2);
+    assert!(attempts.1.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_delivery_blocks_later_same_aggregate_event_while_head_unresolved() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "INSERT INTO bc_example.outbox_events \
+         (event_type, event_version, aggregate_type, aggregate_id, aggregate_sequence, \
+          payload_schema_version, payload) \
+         VALUES ('example.test', 1, 'ordered_test', 991, 1, 1, '{}'::jsonb), \
+                ('example.test', 1, 'ordered_test', 991, 2, 1, '{}'::jsonb)",
+    )
+    .execute(&operations)
+    .await?;
+    let dispatcher = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let head = dispatcher.claim_next("dispatcher-one").await?.unwrap();
+    assert_eq!(head.request.aggregate_sequence, 1);
+    assert!(dispatcher.claim_next("dispatcher-two").await?.is_none());
+    sqlx::query(
+        "UPDATE bc_example.outbox_events SET claim_until = clock_timestamp() - interval '1 second' \
+         WHERE event_id = $1::uuid",
+    )
+    .bind(&head.request.event_id)
+    .execute(&operations)
+    .await?;
+    // An expired but unresolved head remains a barrier; it is reclaimed first.
+    let reclaimed_head = dispatcher.claim_next("dispatcher-two").await?.unwrap();
+    assert_eq!(reclaimed_head.request.aggregate_sequence, 1);
+    assert!(dispatcher.claim_next("dispatcher-three").await?.is_none());
+    let delivery = InProcessEventDelivery::default();
+    delivery.deliver(reclaimed_head.request.clone()).await?;
+    assert!(dispatcher.acknowledge(&reclaimed_head).await?);
+    let second = dispatcher.claim_next("dispatcher-three").await?.unwrap();
+    assert_eq!(second.request.aggregate_sequence, 2);
+    delivery.deliver(second.request.clone()).await?;
+    assert!(dispatcher.acknowledge(&second).await?);
+    dispatcher.close().await;
+    operations.close().await;
+    fixture.cleanup().await?;
     Ok(())
 }
 
