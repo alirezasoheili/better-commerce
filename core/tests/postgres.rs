@@ -26,9 +26,11 @@ struct Fixture {
     admin: PgPool,
     operations_url: String,
     example_url: String,
+    dispatcher_url: String,
     readiness_url: String,
     database: String,
     example_role: String,
+    dispatcher_role: String,
     readiness_role: String,
 }
 
@@ -47,7 +49,7 @@ impl Fixture {
             NEXT_ID.fetch_add(1, Ordering::Relaxed)
         );
         let database = format!("bc_test_{unique}");
-        let (example_role, readiness_role) = scoped_role_names(&database);
+        let (example_role, dispatcher_role, readiness_role) = scoped_role_names(&database);
         let password = format!("test_{unique}");
 
         sqlx::query(&format!("CREATE DATABASE \"{database}\""))
@@ -61,6 +63,11 @@ impl Fixture {
         url.set_password(Some(&password))
             .map_err(|_| "invalid test password")?;
         let example_url = url.to_string();
+        url.set_username(&dispatcher_role)
+            .map_err(|_| "invalid test username")?;
+        url.set_password(Some(&password))
+            .map_err(|_| "invalid test password")?;
+        let dispatcher_url = url.to_string();
         url.set_username(&readiness_role)
             .map_err(|_| "invalid test username")?;
         let readiness_url = url.to_string();
@@ -68,9 +75,11 @@ impl Fixture {
             admin,
             operations_url,
             example_url,
+            dispatcher_url,
             readiness_url,
             database,
             example_role,
+            dispatcher_role,
             readiness_role,
         })
     }
@@ -80,6 +89,7 @@ impl Fixture {
             &self.operations_url,
             true,
             Some(&self.example_url),
+            Some(&self.dispatcher_url),
             &self.readiness_url,
         )
         .await
@@ -89,7 +99,11 @@ impl Fixture {
         sqlx::query(&format!("DROP DATABASE \"{}\" WITH (FORCE)", self.database))
             .execute(&self.admin)
             .await?;
-        for role in [&self.example_role, &self.readiness_role] {
+        for role in [
+            &self.example_role,
+            &self.dispatcher_role,
+            &self.readiness_role,
+        ] {
             sqlx::query(&format!("DROP ROLE \"{role}\""))
                 .execute(&self.admin)
                 .await?;
@@ -146,7 +160,7 @@ async fn module_migrations_have_independent_histories_and_rerun_cleanly() -> Tes
             .await?;
     operations.close().await;
     fixture.cleanup().await?;
-    assert_eq!(example_versions.0, 1);
+    assert_eq!(example_versions.0, 2);
     assert_eq!(shared_versions.0, 1);
     assert!(table_exists.0);
     Ok(())
@@ -231,6 +245,7 @@ async fn module_permissions_reject_role_reuse_across_installations() -> TestResu
         operations.as_str(),
         true,
         Some(example.as_str()),
+        Some(fixture.dispatcher_url.as_str()),
         readiness.as_str(),
     )
     .await
@@ -265,6 +280,153 @@ async fn module_permissions_reject_role_owning_another_database() -> TestResult 
         .await?;
     fixture.cleanup().await?;
     assert!(owner_rejected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_atomicity_commits_business_state_and_event_together() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let composition = composition(&fixture.example_url).await?;
+    assert!(
+        composition
+            .create_example_record("atomic commit".into())
+            .await
+            .expect("example module is composed")
+            .is_ok()
+    );
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    let state_count: (i64,) = sqlx::query_as("SELECT count(*) FROM bc_example.example_records")
+        .fetch_one(&operations)
+        .await?;
+    let event_count: (i64,) = sqlx::query_as("SELECT count(*) FROM bc_example.outbox_events")
+        .fetch_one(&operations)
+        .await?;
+    operations.close().await;
+    composition.close_databases().await;
+    fixture.cleanup().await?;
+    assert_eq!(state_count.0, 1);
+    assert_eq!(event_count.0, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_atomicity_rolls_back_both_writes_when_event_insert_fails() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let composition = composition(&fixture.example_url).await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "CREATE FUNCTION bc_example.reject_outbox_insert() RETURNS trigger \
+         LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'deterministic outbox failure'; END $$",
+    )
+    .execute(&operations)
+    .await?;
+    sqlx::query(
+        "CREATE TRIGGER reject_outbox_insert BEFORE INSERT ON bc_example.outbox_events \
+         FOR EACH ROW EXECUTE FUNCTION bc_example.reject_outbox_insert()",
+    )
+    .execute(&operations)
+    .await?;
+    let command_result = composition
+        .create_example_record("must roll back".into())
+        .await
+        .expect("example module is composed");
+    let state_count: (i64,) = sqlx::query_as("SELECT count(*) FROM bc_example.example_records")
+        .fetch_one(&operations)
+        .await?;
+    let event_count: (i64,) = sqlx::query_as("SELECT count(*) FROM bc_example.outbox_events")
+        .fetch_one(&operations)
+        .await?;
+    operations.close().await;
+    composition.close_databases().await;
+    fixture.cleanup().await?;
+    assert!(
+        command_result.is_err(),
+        "outbox trigger must fail the command"
+    );
+    assert_eq!(state_count.0, 0, "business state must roll back");
+    assert_eq!(event_count.0, 0, "outbox event must roll back");
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_envelope_persists_versioned_event_and_ordering_metadata() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let composition = composition(&fixture.example_url).await?;
+    composition
+        .create_example_record("versioned payload".into())
+        .await
+        .expect("example module is composed")
+        .expect("command succeeds");
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    let row: (bool, String, i16, String, i64, i64, bool, i16, serde_json::Value, i32) =
+        sqlx::query_as(
+            "SELECT event_id IS NOT NULL, event_type, event_version, aggregate_type, aggregate_id, \
+             aggregate_sequence, occurred_at IS NOT NULL, payload_schema_version, payload, attempt_count \
+             FROM bc_example.outbox_events",
+        )
+        .fetch_one(&operations)
+        .await?;
+    operations.close().await;
+    composition.close_databases().await;
+    fixture.cleanup().await?;
+    assert!(row.0);
+    assert_eq!(row.1, "example.record_created");
+    assert_eq!(row.2, 1);
+    assert_eq!(row.3, "example_record");
+    assert_eq!(row.4, 1);
+    assert_eq!(row.5, 1);
+    assert!(row.6);
+    assert_eq!(row.7, 1);
+    assert_eq!(row.8["schema_version"], 1);
+    assert_eq!(row.8["record"]["id"], row.4);
+    assert_eq!(row.8["record"]["label"], "versioned payload");
+    assert_eq!(row.9, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn dispatcher_permissions_are_limited_to_the_example_outbox() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let composition = composition(&fixture.example_url).await?;
+    composition
+        .create_example_record("dispatcher permission".into())
+        .await
+        .expect("example module is composed")
+        .expect("command succeeds");
+    let dispatcher = PgPool::connect(&fixture.dispatcher_url).await?;
+    let (event_count,): (i64,) = sqlx::query_as("SELECT count(*) FROM bc_example.outbox_events")
+        .fetch_one(&dispatcher)
+        .await?;
+    sqlx::query(
+        "UPDATE bc_example.outbox_events SET claimed_by = 'dispatcher-test', \
+         claim_until = clock_timestamp() + interval '1 minute'",
+    )
+    .execute(&dispatcher)
+    .await?;
+    let business_read = sqlx::query("SELECT * FROM bc_example.example_records")
+        .fetch_all(&dispatcher)
+        .await;
+    let business_write = sqlx::query("UPDATE bc_example.example_records SET label = 'forbidden'")
+        .execute(&dispatcher)
+        .await;
+    dispatcher.close().await;
+    composition.close_databases().await;
+    fixture.cleanup().await?;
+    assert_eq!(event_count, 1);
+    for denied in [business_read.err(), business_write.err()] {
+        let error = denied.expect("dispatcher must not access business state");
+        assert_eq!(
+            error
+                .as_database_error()
+                .and_then(|db| db.code())
+                .as_deref(),
+            Some("42501")
+        );
+    }
     Ok(())
 }
 

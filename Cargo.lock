@@ -118,6 +118,7 @@ name = "better-commerce-example"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "sqlx",
 ]
 

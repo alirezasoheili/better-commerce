@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
-use better_commerce_example::ExampleModule;
 use better_commerce_example::database::ExampleDatabase;
-use better_commerce_example_consumer::{ExampleLabelPort, read_example_label};
+use better_commerce_example::{ExampleError, ExampleModule};
+use better_commerce_example_consumer::{
+    ExampleCommandPort, ExampleLabelPort, create_example_record, read_example_label,
+};
 
 use crate::manifest::{ManifestError, ValidatedManifest};
 
@@ -79,6 +81,14 @@ impl ExampleLabelPort for LocalExampleAdapter {
     }
 }
 
+impl ExampleCommandPort for LocalExampleAdapter {
+    type Error = ExampleError;
+
+    async fn create_example_record(&self, label: String) -> Result<(), Self::Error> {
+        self.0.create_record(label).await.map(|_| ())
+    }
+}
+
 impl Composition {
     /// Invoke the consumer through the local adapter composed for the example module.
     pub fn read_example_label(&self) -> Option<String> {
@@ -86,6 +96,16 @@ impl Composition {
             .map(|ComposedModule::Example(module)| {
                 read_example_label(&LocalExampleAdapter(module.clone()))
             })
+    }
+
+    /// Invoke the consumer command through the composed local example adapter.
+    pub async fn create_example_record(&self, label: String) -> Option<Result<(), ExampleError>> {
+        match self.module("example") {
+            Some(ComposedModule::Example(module)) => {
+                Some(create_example_record(&LocalExampleAdapter(module.clone()), label).await)
+            }
+            None => None,
+        }
     }
 }
 

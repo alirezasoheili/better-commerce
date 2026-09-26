@@ -12,12 +12,14 @@ pub async fn migrate_installation(
     operations_url: &str,
     example_enabled: bool,
     example_runtime_url: Option<&str>,
+    dispatcher_url: Option<&str>,
     readiness_url: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let operations = Url::parse(operations_url)?;
     let database_name =
         percent_decode_str(operations.path().trim_start_matches('/')).decode_utf8()?;
-    let (expected_example_role, expected_ready_role) = scoped_role_names(&database_name);
+    let (expected_example_role, expected_dispatcher_role, expected_ready_role) =
+        scoped_role_names(&database_name);
     let example_identity = if example_enabled {
         Some(RuntimeIdentity::parse(
             example_runtime_url.ok_or("enabled example module needs a runtime database URL")?,
@@ -27,13 +29,30 @@ pub async fn migrate_installation(
     } else {
         None
     };
+    let dispatcher_identity = if example_enabled {
+        Some(RuntimeIdentity::parse(
+            dispatcher_url.ok_or("enabled example module needs a dispatcher database URL")?,
+            operations_url,
+            &expected_dispatcher_role,
+        )?)
+    } else {
+        None
+    };
     let ready_identity =
         RuntimeIdentity::parse(readiness_url, operations_url, &expected_ready_role)?;
-    if example_identity
-        .as_ref()
-        .is_some_and(|identity| identity.role == ready_identity.role)
-    {
-        return Err("module runtime and readiness must use distinct roles".into());
+    let identities = [
+        example_identity.as_ref(),
+        dispatcher_identity.as_ref(),
+        Some(&ready_identity),
+    ];
+    for left in 0..identities.len() {
+        for right in (left + 1)..identities.len() {
+            if identities[left]
+                .is_some_and(|left| identities[right].is_some_and(|right| left.role == right.role))
+            {
+                return Err("runtime, dispatcher, and readiness must use distinct roles".into());
+            }
+        }
     }
     let pool = PgPoolOptions::new()
         .max_connections(1)
@@ -45,6 +64,9 @@ pub async fn migrate_installation(
     if let Some(example_identity) = &example_identity {
         provision_role(&mut connection, example_identity).await?;
     }
+    if let Some(dispatcher_identity) = &dispatcher_identity {
+        provision_role(&mut connection, dispatcher_identity).await?;
+    }
     revoke_database_public_connect(&mut connection).await?;
     sqlx::query("REVOKE ALL ON SCHEMA public FROM PUBLIC")
         .execute(&mut *connection)
@@ -52,6 +74,9 @@ pub async fn migrate_installation(
     grant_database_connect(&mut connection, &ready_identity.role).await?;
     if let Some(example_identity) = &example_identity {
         grant_database_connect(&mut connection, &example_identity.role).await?;
+    }
+    if let Some(dispatcher_identity) = &dispatcher_identity {
+        grant_database_connect(&mut connection, &dispatcher_identity.role).await?;
     }
 
     sqlx::query("CREATE SCHEMA IF NOT EXISTS bc_shared")
@@ -119,9 +144,34 @@ pub async fn migrate_installation(
         .await?;
     }
 
+    if let Some(dispatcher_identity) = &dispatcher_identity {
+        let role = dispatcher_identity.quoted_role();
+        sqlx::query(&format!("GRANT USAGE ON SCHEMA {SCHEMA} TO {role}"))
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query(&format!(
+            "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA {SCHEMA} FROM {role}"
+        ))
+        .execute(&mut *connection)
+        .await?;
+        sqlx::query(&format!(
+            "GRANT SELECT, UPDATE ON TABLE {SCHEMA}.outbox_events TO {role}"
+        ))
+        .execute(&mut *connection)
+        .await?;
+        sqlx::query(&format!(
+            "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA {SCHEMA} FROM {role}"
+        ))
+        .execute(&mut *connection)
+        .await?;
+    }
+
     ensure_role_is_scoped(&mut connection, &ready_identity.role, SHARED_SCHEMA).await?;
     if let Some(example_identity) = &example_identity {
         ensure_role_is_scoped(&mut connection, &example_identity.role, SCHEMA).await?;
+    }
+    if let Some(dispatcher_identity) = &dispatcher_identity {
+        ensure_role_is_scoped(&mut connection, &dispatcher_identity.role, SCHEMA).await?;
     }
 
     connection.close().await?;
@@ -130,7 +180,7 @@ pub async fn migrate_installation(
 }
 
 /// Stable, database-specific login names for one installation.
-pub fn scoped_role_names(database_name: &str) -> (String, String) {
+pub fn scoped_role_names(database_name: &str) -> (String, String, String) {
     let slug: String = database_name
         .chars()
         .take(12)
@@ -149,6 +199,7 @@ pub fn scoped_role_names(database_name: &str) -> (String, String) {
         .collect();
     (
         format!("bc_example_{slug}_{fingerprint}"),
+        format!("bc_dispatch_{slug}_{fingerprint}"),
         format!("bc_ready_{slug}_{fingerprint}"),
     )
 }

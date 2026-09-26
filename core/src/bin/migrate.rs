@@ -15,10 +15,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    let dispatcher_url = if manifest.modules.contains_key("example") {
+        Some(std::env::var("DISPATCHER_DATABASE_URL")?)
+    } else {
+        None
+    };
     migrate_installation(
         &std::env::var("OPERATIONS_DATABASE_URL")?,
         manifest.modules.contains_key("example"),
         example_url.as_deref(),
+        dispatcher_url.as_deref(),
         &std::env::var("READINESS_DATABASE_URL")?,
     )
     .await
