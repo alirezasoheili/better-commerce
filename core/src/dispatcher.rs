@@ -171,6 +171,7 @@ impl PostgresOutboxDispatcher {
             "WITH candidate AS (\
                  SELECT event_id FROM bc_example.outbox_events AS event \
                  WHERE event.delivered_at IS NULL \
+                   AND event.dead_lettered_at IS NULL \
                    AND event.available_at <= clock_timestamp() \
                    AND (event.claimed_by IS NULL OR event.claim_until <= clock_timestamp()) \
                    AND NOT EXISTS (\
@@ -241,10 +242,34 @@ impl PostgresOutboxDispatcher {
         let result = sqlx::query(
             "UPDATE bc_example.outbox_events \
              SET claimed_by = NULL, claim_until = NULL, available_at = clock_timestamp() \
-             WHERE event_id = $1::uuid AND delivered_at IS NULL AND claimed_by = $2",
+             WHERE event_id = $1::uuid AND delivered_at IS NULL AND claimed_by = $2 \
+               AND claim_until > clock_timestamp()",
         )
         .bind(&claim.request.event_id)
         .bind(&claim.claimed_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Persists a dead-letter transition for the current, unexpired claim. The
+    /// unresolved row remains an ordering barrier, but is no longer claimable.
+    pub async fn dead_letter(
+        &self,
+        claim: &ClaimedEvent,
+        reason: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE bc_example.outbox_events \
+             SET dead_lettered_at = clock_timestamp(), dead_letter_reason = $3, \
+                 claimed_by = NULL, claim_until = NULL \
+             WHERE event_id = $1::uuid AND delivered_at IS NULL \
+               AND dead_lettered_at IS NULL AND claimed_by = $2 \
+               AND claim_until > clock_timestamp()",
+        )
+        .bind(&claim.request.event_id)
+        .bind(&claim.claimed_by)
+        .bind(reason)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() == 1)
@@ -266,11 +291,16 @@ impl PostgresOutboxDispatcher {
                 event_id: claim.request.event_id,
             }),
             Err(error) => {
-                self.release_rejected(&claim).await?;
-                Ok(DispatchOutcome::Rejected {
-                    event_id: claim.request.event_id,
-                    reason: error.0,
-                })
+                if self.release_rejected(&claim).await? {
+                    Ok(DispatchOutcome::Rejected {
+                        event_id: claim.request.event_id,
+                        reason: error.0,
+                    })
+                } else {
+                    Ok(DispatchOutcome::LeaseLost {
+                        event_id: claim.request.event_id,
+                    })
+                }
             }
         }
     }
