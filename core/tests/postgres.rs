@@ -25,6 +25,29 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 const MANIFEST: &str = "release: 0.1.0\ndeployment_mode: self_hosted\nmodules:\n  example:\n    version: 0.1.0\n    configuration:\n      label: Demo\n";
 
+struct DelayedRejection {
+    started: tokio::sync::mpsc::UnboundedSender<()>,
+    resume: tokio::sync::Notify,
+}
+
+impl EventDelivery for DelayedRejection {
+    #[allow(clippy::manual_async_fn)] // The EventDelivery port returns a Send future.
+    fn deliver(
+        &self,
+        _event: better_commerce_core::dispatcher::DeliveryRequest,
+    ) -> impl std::future::Future<
+        Output = Result<(), better_commerce_core::dispatcher::DeliveryFailure>,
+    > + Send {
+        async move {
+            self.started.send(()).expect("test receiver remains open");
+            self.resume.notified().await;
+            Err(better_commerce_core::dispatcher::DeliveryFailure(
+                "delayed rejection".into(),
+            ))
+        }
+    }
+}
+
 struct Fixture {
     admin: PgPool,
     operations_url: String,
@@ -163,7 +186,7 @@ async fn module_migrations_have_independent_histories_and_rerun_cleanly() -> Tes
             .await?;
     operations.close().await;
     fixture.cleanup().await?;
-    assert_eq!(example_versions.0, 2);
+    assert_eq!(example_versions.0, 3);
     assert_eq!(shared_versions.0, 1);
     assert!(table_exists.0);
     Ok(())
@@ -610,11 +633,15 @@ async fn outbox_delivery_blocks_later_same_aggregate_event_while_head_unresolved
     let head = dispatcher.claim_next("dispatcher-one").await?.unwrap();
     assert_eq!(head.request.aggregate_sequence, 1);
     assert!(dispatcher.claim_next("dispatcher-two").await?.is_none());
+    assert!(dispatcher.release_rejected(&head).await?);
+    let retried_head = dispatcher.claim_next("dispatcher-two").await?.unwrap();
+    assert_eq!(retried_head.request.aggregate_sequence, 1);
+    assert!(dispatcher.claim_next("dispatcher-three").await?.is_none());
     sqlx::query(
         "UPDATE bc_example.outbox_events SET claim_until = clock_timestamp() - interval '1 second' \
          WHERE event_id = $1::uuid",
     )
-    .bind(&head.request.event_id)
+    .bind(&retried_head.request.event_id)
     .execute(&operations)
     .await?;
     // An expired but unresolved head remains a barrier; it is reclaimed first.
@@ -629,6 +656,309 @@ async fn outbox_delivery_blocks_later_same_aggregate_event_while_head_unresolved
     delivery.deliver(second.request.clone()).await?;
     assert!(dispatcher.acknowledge(&second).await?);
     dispatcher.close().await;
+    operations.close().await;
+    fixture.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_concurrency_claims_different_aggregate_heads_with_independent_dispatchers()
+-> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "INSERT INTO bc_example.outbox_events \
+         (event_type, event_version, aggregate_type, aggregate_id, aggregate_sequence, \
+          payload_schema_version, payload) \
+         VALUES ('example.test', 1, 'concurrency_test', 1001, 1, 1, '{}'::jsonb), \
+                ('example.test', 1, 'concurrency_test', 1001, 2, 1, '{}'::jsonb), \
+                ('example.test', 1, 'concurrency_test', 1002, 1, 1, '{}'::jsonb)",
+    )
+    .execute(&operations)
+    .await?;
+
+    // Each dispatcher owns a distinct PgPool, as independent processes would.
+    let dispatcher_one = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let dispatcher_two = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let start = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+    let first_gate = start.clone();
+    let first_dispatcher = dispatcher_one.clone();
+    let first_claim = tokio::spawn(async move {
+        first_gate.wait().await;
+        first_dispatcher.claim_next("dispatcher-one").await
+    });
+    let second_gate = start.clone();
+    let second_dispatcher = dispatcher_two.clone();
+    let second_claim = tokio::spawn(async move {
+        second_gate.wait().await;
+        second_dispatcher.claim_next("dispatcher-two").await
+    });
+    start.wait().await;
+    let (claim_one, claim_two) = (first_claim.await?, second_claim.await?);
+    let claim_one = claim_one?.expect("dispatcher one claims an aggregate head");
+    let claim_two = claim_two?.expect("dispatcher two claims a different aggregate head");
+
+    assert_ne!(claim_one.request.event_id, claim_two.request.event_id);
+    assert_eq!(claim_one.request.aggregate_type, "concurrency_test");
+    assert_eq!(claim_two.request.aggregate_type, "concurrency_test");
+    assert_eq!(claim_one.request.aggregate_sequence, 1);
+    assert_eq!(claim_two.request.aggregate_sequence, 1);
+    assert_ne!(
+        claim_one.request.aggregate_id,
+        claim_two.request.aggregate_id
+    );
+    assert!(
+        dispatcher_one
+            .claim_next("dispatcher-three")
+            .await?
+            .is_none()
+    );
+    assert!(
+        dispatcher_two
+            .claim_next("dispatcher-four")
+            .await?
+            .is_none()
+    );
+
+    dispatcher_one.close().await;
+    dispatcher_two.close().await;
+    operations.close().await;
+    fixture.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_concurrency_competing_dispatchers_never_own_the_same_event() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "INSERT INTO bc_example.outbox_events \
+         (event_type, event_version, aggregate_type, aggregate_id, aggregate_sequence, \
+          payload_schema_version, payload) \
+         VALUES ('example.test', 1, 'competing_test', 2001, 1, 1, '{}'::jsonb)",
+    )
+    .execute(&operations)
+    .await?;
+    let dispatcher_one = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let dispatcher_two = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let start = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+    let first_gate = start.clone();
+    let first_dispatcher = dispatcher_one.clone();
+    let first_claim = tokio::spawn(async move {
+        first_gate.wait().await;
+        first_dispatcher.claim_next("dispatcher-one").await
+    });
+    let second_gate = start.clone();
+    let second_dispatcher = dispatcher_two.clone();
+    let second_claim = tokio::spawn(async move {
+        second_gate.wait().await;
+        second_dispatcher.claim_next("dispatcher-two").await
+    });
+    start.wait().await;
+    let (claim_one, claim_two) = (first_claim.await?, second_claim.await?);
+    let claims = [claim_one?, claim_two?];
+    assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
+    let owner = claims.into_iter().flatten().next().unwrap();
+    let persisted_owner: (String, i32) = sqlx::query_as(
+        "SELECT claimed_by, attempt_count FROM bc_example.outbox_events WHERE event_id = $1::uuid",
+    )
+    .bind(&owner.request.event_id)
+    .fetch_one(&operations)
+    .await?;
+    assert_eq!(persisted_owner.0, owner.claimed_by);
+    assert_eq!(persisted_owner.1, 1);
+
+    dispatcher_one.close().await;
+    dispatcher_two.close().await;
+    operations.close().await;
+    fixture.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_lease_recovery_reclaims_head_before_successor_and_fences_stale_claims() -> TestResult
+{
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "INSERT INTO bc_example.outbox_events \
+         (event_type, event_version, aggregate_type, aggregate_id, aggregate_sequence, \
+          payload_schema_version, payload) \
+         VALUES ('example.test', 1, 'recovery_test', 3001, 1, 1, '{}'::jsonb), \
+                ('example.test', 1, 'recovery_test', 3001, 2, 1, '{}'::jsonb)",
+    )
+    .execute(&operations)
+    .await?;
+    let dispatcher_one = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let dispatcher_two = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let initial = dispatcher_one
+        .claim_next("dispatcher-one")
+        .await?
+        .expect("first aggregate head should be claimed");
+    assert_eq!(initial.request.aggregate_sequence, 1);
+    assert!(dispatcher_two.claim_next("dispatcher-two").await?.is_none());
+
+    let delivery = InProcessEventDelivery::default();
+    delivery.deliver(initial.request.clone()).await?;
+    // Simulate process loss after acceptance by expiring persisted lease state.
+    sqlx::query(
+        "UPDATE bc_example.outbox_events SET claim_until = clock_timestamp() - interval '1 second' \
+         WHERE event_id = $1::uuid",
+    )
+    .bind(&initial.request.event_id)
+    .execute(&operations)
+    .await?;
+    let reclaimed = dispatcher_two
+        .claim_next("dispatcher-two")
+        .await?
+        .expect("expired head is reclaimed before its successor");
+    assert_eq!(reclaimed.request.event_id, initial.request.event_id);
+    assert_eq!(reclaimed.request.aggregate_sequence, 1);
+    assert!(!dispatcher_one.acknowledge(&initial).await?);
+    assert!(!dispatcher_one.release_rejected(&initial).await?);
+    assert!(dispatcher_one.claim_next("dispatcher-one").await?.is_none());
+
+    delivery.deliver(reclaimed.request.clone()).await?;
+    assert!(dispatcher_two.acknowledge(&reclaimed).await?);
+    let successor = dispatcher_one
+        .claim_next("dispatcher-one")
+        .await?
+        .expect("successor advances only after reclaimed head is acknowledged");
+    assert_eq!(successor.request.aggregate_sequence, 2);
+    assert_eq!(delivery.attempts_for(&initial.request.event_id), 2);
+    assert_eq!(delivery.accepted_event_ids().len(), 1);
+    assert!(dispatcher_one.acknowledge(&successor).await?);
+
+    dispatcher_one.close().await;
+    dispatcher_two.close().await;
+    operations.close().await;
+    fixture.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_concurrency_stale_rejection_reports_lease_lost_without_mutating_new_claim()
+-> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "INSERT INTO bc_example.outbox_events \
+         (event_type, event_version, aggregate_type, aggregate_id, aggregate_sequence, \
+          payload_schema_version, payload) \
+         VALUES ('example.test', 1, 'stale_rejection_test', 5001, 1, 1, '{}'::jsonb)",
+    )
+    .execute(&operations)
+    .await?;
+    let dispatcher_one = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let dispatcher_two = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let delayed_delivery = std::sync::Arc::new(DelayedRejection {
+        started: started_tx,
+        resume: tokio::sync::Notify::new(),
+    });
+    let first_dispatcher = dispatcher_one.clone();
+    let first_delivery = delayed_delivery.clone();
+    let first_attempt = tokio::spawn(async move {
+        first_dispatcher
+            .dispatch_one("dispatcher-one", first_delivery.as_ref())
+            .await
+    });
+    started_rx.recv().await.expect("delivery has started");
+
+    sqlx::query(
+        "UPDATE bc_example.outbox_events SET claim_until = clock_timestamp() - interval '1 second' \
+         WHERE aggregate_type = 'stale_rejection_test' AND aggregate_id = 5001",
+    )
+    .execute(&operations)
+    .await?;
+    let replacement = dispatcher_two
+        .claim_next("dispatcher-two")
+        .await?
+        .expect("second dispatcher reclaims expired event");
+    let accepting_delivery = InProcessEventDelivery::default();
+    accepting_delivery
+        .deliver(replacement.request.clone())
+        .await?;
+    assert!(dispatcher_two.acknowledge(&replacement).await?);
+
+    delayed_delivery.resume.notify_one();
+    let stale_outcome = first_attempt.await??;
+    assert!(matches!(stale_outcome, DispatchOutcome::LeaseLost { .. }));
+    let state: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT delivered_at::text, claimed_by FROM bc_example.outbox_events \
+         WHERE event_id = $1::uuid",
+    )
+    .bind(&replacement.request.event_id)
+    .fetch_one(&operations)
+    .await?;
+    assert!(state.0.is_some());
+    assert!(state.1.is_none());
+
+    dispatcher_one.close().await;
+    dispatcher_two.close().await;
+    operations.close().await;
+    fixture.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn outbox_concurrency_dead_lettered_head_blocks_only_its_aggregate() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "INSERT INTO bc_example.outbox_events \
+         (event_type, event_version, aggregate_type, aggregate_id, aggregate_sequence, \
+          payload_schema_version, payload) \
+         VALUES ('example.test', 1, 'dead_letter_test', 4001, 1, 1, '{}'::jsonb), \
+                ('example.test', 1, 'dead_letter_test', 4001, 2, 1, '{}'::jsonb), \
+                ('example.test', 1, 'dead_letter_test', 4002, 1, 1, '{}'::jsonb)",
+    )
+    .execute(&operations)
+    .await?;
+    let dispatcher_one = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let dispatcher_two = PostgresOutboxDispatcher::connect(&fixture.dispatcher_url, 60).await?;
+    let head = dispatcher_one
+        .claim_next("dispatcher-one")
+        .await?
+        .expect("oldest eligible aggregate head should be claimed");
+    assert_eq!(head.request.aggregate_id, 4001);
+    assert_eq!(head.request.aggregate_sequence, 1);
+    assert!(
+        dispatcher_one
+            .dead_letter(&head, "operator quarantine")
+            .await?
+    );
+
+    let independent = dispatcher_two
+        .claim_next("dispatcher-two")
+        .await?
+        .expect("dead-lettered aggregate must not block another aggregate");
+    assert_eq!(independent.request.aggregate_id, 4002);
+    assert_eq!(independent.request.aggregate_sequence, 1);
+    assert!(
+        dispatcher_one
+            .claim_next("dispatcher-three")
+            .await?
+            .is_none()
+    );
+    let state: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT delivered_at::text, dead_lettered_at::text, dead_letter_reason \
+         FROM bc_example.outbox_events WHERE event_id = $1::uuid",
+    )
+    .bind(&head.request.event_id)
+    .fetch_one(&operations)
+    .await?;
+    assert!(state.0.is_none());
+    assert!(state.1.is_some());
+    assert_eq!(state.2.as_deref(), Some("operator quarantine"));
+
+    dispatcher_one.close().await;
+    dispatcher_two.close().await;
     operations.close().await;
     fixture.cleanup().await?;
     Ok(())
