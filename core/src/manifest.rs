@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use better_commerce_example::ExampleConfiguration;
 use semver::{Version, VersionReq};
 use serde::Deserialize;
 
@@ -25,7 +24,7 @@ pub struct Manifest {
 #[serde(deny_unknown_fields)]
 pub struct ModuleInstallation {
     pub version: Version,
-    pub configuration: ExampleConfiguration,
+    pub configuration: serde_yaml::Value,
 }
 
 #[derive(Clone, Debug)]
@@ -137,12 +136,6 @@ pub fn validate_manifest(
             return Err(ManifestError::new(format!(
                 "module '{module_id}' version {} is incompatible; release {} supports {}",
                 installation.version, metadata.release, module.version
-            )));
-        }
-
-        if installation.configuration.label.trim().is_empty() {
-            return Err(ManifestError::new(format!(
-                "module '{module_id}' configuration.label must not be empty"
             )));
         }
 
@@ -268,24 +261,19 @@ mod tests {
     }
 
     #[test]
-    fn manifest_validation_rejects_missing_configuration_and_unknown_fields() {
-        let missing_config = VALID.replace("      label: Demo\n", "");
+    fn generic_manifest_accepts_opaque_module_configuration() {
+        let source = VALID.replace("label: Demo", "arbitrary: [1, true, null]");
+        let validated = parse_and_validate(&source, &supported_release_metadata()).unwrap();
+        assert_eq!(
+            validated.modules["example"].configuration,
+            serde_yaml::from_str::<serde_yaml::Value>("{arbitrary: [1, true, null]}").unwrap()
+        );
+    }
+
+    #[test]
+    fn generic_manifest_rejects_missing_configuration() {
+        let missing_config = VALID.replace("    configuration:\n      label: Demo\n", "");
         assert!(parse_and_validate(&missing_config, &supported_release_metadata()).is_err());
-
-        let unknown_field = VALID.replace(
-            "      label: Demo",
-            "      label: Demo\n      surprise: true",
-        );
-        let error = parse_and_validate(&unknown_field, &supported_release_metadata()).unwrap_err();
-        assert!(error.to_string().contains("unknown field `surprise`"));
-
-        let empty_config = VALID.replace("label: Demo", "label: '  '");
-        let error = parse_and_validate(&empty_config, &supported_release_metadata()).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("configuration.label must not be empty")
-        );
     }
 
     #[test]

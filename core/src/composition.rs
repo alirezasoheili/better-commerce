@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use better_commerce_example::database::ExampleDatabase;
-use better_commerce_example::{ExampleError, ExampleModule};
+use better_commerce_example::{ExampleError, ExampleModule, parse_configuration};
 use better_commerce_example_consumer::{
     ExampleCommandPort, ExampleLabelPort, create_example_record, read_example_label,
 };
@@ -60,7 +60,15 @@ pub fn compose_modules(manifest: ValidatedManifest) -> Result<Composition, Manif
 
     for (module_id, installation) in manifest.modules {
         let module = match module_id.as_str() {
-            "example" => ComposedModule::Example(ExampleModule::new(installation.configuration)),
+            "example" => {
+                let configuration =
+                    parse_configuration(installation.configuration).map_err(|error| {
+                        ManifestError::new(format!(
+                            "module 'example' configuration is invalid: {error}"
+                        ))
+                    })?;
+                ComposedModule::Example(ExampleModule::new(configuration))
+            }
             _ => {
                 return Err(ManifestError::new(format!(
                     "module '{module_id}' has no startup composition in this release"
@@ -136,6 +144,18 @@ mod tests {
         let manifest = parse_and_validate(source, &supported_release_metadata()).unwrap();
         let composition = compose_modules(manifest).unwrap();
         assert_eq!(composition.enabled_module_ids().count(), 0);
+    }
+
+    #[test]
+    fn invalid_module_configuration_fails_during_composition() {
+        let source = "release: 0.1.0\ndeployment_mode: self_hosted\nmodules:\n  example:\n    version: 0.1.0\n    configuration:\n      label: 42\n";
+        let manifest = parse_and_validate(source, &supported_release_metadata()).unwrap();
+        let error = compose_modules(manifest).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("module 'example' configuration is invalid")
+        );
     }
 
     #[test]
