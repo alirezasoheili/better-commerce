@@ -1,1 +1,174 @@
+# =============================================================================
+# Better Commerce
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Rust / Cargo
+# -----------------------------------------------------------------------------
+
 /target/
+**/*.rs.bk
+rustc-ice-*.txt
+
+# Profiling / coverage artifacts
+*.profraw
+*.profdata
+tarpaulin-report.html
+cobertura.xml
+lcov.info
+/coverage/
+
+
+# -----------------------------------------------------------------------------
+# Environment / local configuration
+# -----------------------------------------------------------------------------
+
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Machine-specific installation manifests
+/manifest.local.yaml
+/manifest.*.local.yaml
+
+
+# -----------------------------------------------------------------------------
+# Local PostgreSQL / database state
+# -----------------------------------------------------------------------------
+
+/.pgdata/
+/.postgres/
+/tmp/
+/.tmp/
+
+
+# -----------------------------------------------------------------------------
+# Logs / runtime output
+# -----------------------------------------------------------------------------
+
+*.log
+/logs/
+
+
+# -----------------------------------------------------------------------------
+# Editors / IDEs
+# -----------------------------------------------------------------------------
+
+.idea/
+.vscode/
+
+*.swp
+*.swo
+*~
+*.code-workspace
+
+
+# -----------------------------------------------------------------------------
+# OS files
+# -----------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+
+# -----------------------------------------------------------------------------
+# Python tooling
+#
+# We currently use Python for architecture/tooling scripts.
+# -----------------------------------------------------------------------------
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+
+.venv/
+venv/
+
+
+# -----------------------------------------------------------------------------
+# Node / frontend tooling
+#
+# For the future Astro storefront and React admin.
+# -----------------------------------------------------------------------------
+
+node_modules/
+
+# Package-manager caches
+.pnpm-store/
+.npm/
+
+# Build output
+dist/
+build/
+
+# Framework/tool caches
+.astro/
+.vite/
+.turbo/
+.cache/
+
+# Package-manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# -----------------------------------------------------------------------------
+# Buf / protobuf local cache
+# -----------------------------------------------------------------------------
+
+/.buf/
+
+
+# -----------------------------------------------------------------------------
+# Agent / local development scratch
+# -----------------------------------------------------------------------------
+
+# Local agent scratch directory. Not part of repository architecture.
+/graft/
+
+# Local Codex state if one is ever created inside the repository.
+/.codex/
+
+
+# -----------------------------------------------------------------------------
+# Temporary files
+# -----------------------------------------------------------------------------
+
+*.tmp
+*.temp
+*.bak
+*.orig
+
+
+# =============================================================================
+# Intentionally tracked — DO NOT ignore
+# =============================================================================
+#
+# Cargo.lock
+# manifest.yaml
+# .sqlx/                                      (if introduced later)
+# contracts/baseline/
+# contracts/proto/
+# modules/example-transport/src/generated/
+#
+# Generated protobuf output is deliberately checked in and CI verifies that
+# regeneration leaves it unchanged.
