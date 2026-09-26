@@ -1,0 +1,13 @@
+[package]
+name = "better-commerce-example-transport"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+better-commerce-example-consumer = { path = "../example-consumer" }
+prost.workspace = true
+
+[lints]
+workspace = true
