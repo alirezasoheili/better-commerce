@@ -1,0 +1,7 @@
+.git
+target
+.codex
+.bc
+.env*
+manifest.*.local.yaml
+*.log
