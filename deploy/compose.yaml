@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${BC_OPERATIONS_PASSWORD:?operations password is required}
+      POSTGRES_DB: ${BC_DATABASE_NAME:?database name is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d $${POSTGRES_DB}"]
+      interval: 1s
+      timeout: 1s
+      retries: 60
+
+  migrate:
+    image: better-commerce-local:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["/usr/local/bin/migrate"]
+    environment:
+      MANIFEST_PATH: /app/manifest.yaml
+      OPERATIONS_DATABASE_URL: ${OPERATIONS_DATABASE_URL:?operations URL is required}
+      EXAMPLE_RUNTIME_DATABASE_URL: ${EXAMPLE_RUNTIME_DATABASE_URL:?example URL is required}
+      DISPATCHER_DATABASE_URL: ${DISPATCHER_DATABASE_URL:?dispatcher URL is required}
+      READINESS_DATABASE_URL: ${READINESS_DATABASE_URL:?readiness URL is required}
+    volumes:
+      - type: bind
+        source: ${BC_MANIFEST_HOST_PATH:?manifest path is required}
+        target: /app/manifest.yaml
+        read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: better-commerce-local:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["/usr/local/bin/better-commerce-core"]
+    environment:
+      MANIFEST_PATH: /app/manifest.yaml
+      EXAMPLE_RUNTIME_DATABASE_URL: ${EXAMPLE_RUNTIME_DATABASE_URL:?example URL is required}
+      READINESS_DATABASE_URL: ${READINESS_DATABASE_URL:?readiness URL is required}
+      PORT: "3000"
+    ports:
+      - "127.0.0.1:${BC_HTTP_PORT:?HTTP port is required}:3000"
+    volumes:
+      - type: bind
+        source: ${BC_MANIFEST_HOST_PATH:?manifest path is required}
+        target: /app/manifest.yaml
+        read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

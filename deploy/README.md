@@ -1,5 +1,55 @@
 # M0-04 PostgreSQL setup
 
+## Local first install
+
+Prerequisites: Docker with the Compose plugin. The checked-in [`manifest.yaml`](../manifest.yaml)
+contains nonsecret settings and local secret references. Secret references use either
+`env: VARIABLE_NAME` or `file: ./relative/path`; file paths are resolved beside the
+manifest and one trailing line ending is removed.
+
+Set `BC_OPERATIONS_PASSWORD`, `BC_EXAMPLE_PASSWORD`, `BC_DISPATCHER_PASSWORD`, and
+`BC_READINESS_PASSWORD` in the environment (or change the manifest references to
+files), then build and run the `bc` binary:
+
+```sh
+cargo build --locked -p better-commerce-core --bin bc
+cargo run --locked -p better-commerce-core --bin bc -- reconcile --manifest manifest.yaml
+```
+
+The command validates the manifest and module configuration before it invokes Docker,
+starts PostgreSQL 18, runs the owned migrations with the operations identity, starts
+the API with scoped runtime/readiness credentials, and waits up to 90 seconds for
+`GET /readyz` to return HTTP 200. The API is published on the manifest's loopback-only
+`local.http_port`. Compose project names are derived deterministically from
+`local.installation_id`; the named PostgreSQL volume persists installation data.
+Compose state is described by `deploy/compose.yaml`; no generated file contains
+resolved secret values. Normal reconciliation never removes volumes.
+
+Minimal manifest shape (the root `manifest.yaml` is also a runnable example once its
+environment variables are set):
+
+```yaml
+release: 0.1.0
+deployment_mode: self_hosted
+modules:
+  example:
+    version: 0.1.0
+    configuration:
+      label: Example
+local:
+  installation_id: example-local
+  database_name: bc_example_local
+  http_port: 3000
+  secrets:
+    operations_password: { env: BC_OPERATIONS_PASSWORD }
+    example_password: { env: BC_EXAMPLE_PASSWORD }
+    dispatcher_password: { env: BC_DISPATCHER_PASSWORD }
+    readiness_password: { env: BC_READINESS_PASSWORD }
+```
+
+On success `bc` prints the `/readyz` URL. PostgreSQL is only reachable on the
+installation's private Compose network.
+
 The migration command is `cargo run -p better-commerce-core --bin migrate`. Set
 `OPERATIONS_DATABASE_URL` and `READINESS_DATABASE_URL` to the same installation
 database. When `example` is enabled, also set `EXAMPLE_RUNTIME_DATABASE_URL` and
