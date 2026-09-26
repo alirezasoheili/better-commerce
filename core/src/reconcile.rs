@@ -347,12 +347,45 @@ fn run_compose(
             || "terminated by signal".to_owned(),
             |code| format!("exit status {code}"),
         );
+        let diagnostics =
+            redacted_diagnostics(&output.stdout, &output.stderr, &context.environment);
         return Err(ReconcileError::new(
             phase,
-            format!("{DOCKER_COMPOSE} {} ({status})", args.join(" ")),
+            format!(
+                "{DOCKER_COMPOSE} {} ({status}): {diagnostics}",
+                args.join(" ")
+            ),
         ));
     }
     Ok(())
+}
+
+fn redacted_diagnostics(
+    stdout: &[u8],
+    stderr: &[u8],
+    environment: &BTreeMap<String, String>,
+) -> String {
+    let raw = format!(
+        "{}{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    );
+    let mut sensitive_values: Vec<_> = environment
+        .iter()
+        .filter(|(key, value)| {
+            !value.is_empty() && (key.ends_with("_PASSWORD") || key.ends_with("_DATABASE_URL"))
+        })
+        .map(|(_, value)| value.as_str())
+        .collect();
+    sensitive_values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    let redacted = sensitive_values
+        .into_iter()
+        .fold(raw, |message, secret| message.replace(secret, "[REDACTED]"));
+    let message = redacted.trim();
+    if message.is_empty() {
+        return "Compose returned no diagnostic output".to_owned();
+    }
+    message.chars().take(1200).collect()
 }
 
 async fn verify_ready(url: &str) -> Result<(), ReconcileError> {
@@ -542,5 +575,22 @@ mod tests {
             assert!(!compose.contains(sentinel));
         }
         assert!(compose.contains("${OPERATIONS_DATABASE_URL:?operations URL is required}"));
+    }
+
+    #[test]
+    fn compose_failure_diagnostics_are_actionable_and_redact_secrets_and_urls() {
+        use std::collections::BTreeMap;
+
+        let secret = "TOP_SECRET_SHOULD_NEVER_APPEAR_FAILURE";
+        let url = format!("postgres://postgres:{secret}@postgres:5432/bc_demo");
+        let stderr = format!("connection failed using {secret} and {url}").into_bytes();
+        let environment = BTreeMap::from([
+            ("BC_OPERATIONS_PASSWORD".to_owned(), secret.to_owned()),
+            ("OPERATIONS_DATABASE_URL".to_owned(), url),
+        ]);
+        let diagnostics = super::redacted_diagnostics(&[], &stderr, &environment);
+        assert!(diagnostics.contains("connection failed"));
+        assert!(!diagnostics.contains(secret));
+        assert!(!diagnostics.contains("postgres://"));
     }
 }
