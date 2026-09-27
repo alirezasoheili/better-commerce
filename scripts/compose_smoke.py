@@ -138,8 +138,8 @@ def snapshot(project, database, env, event_id, volume):
             project,
             database,
             env,
-            "SELECT json_build_array(id, label)::text FROM bc_example.example_records "
-            "WHERE label LIKE 'repeat-smoke-%' ORDER BY id",
+            "SELECT COALESCE(json_agg(json_build_array(id, label) ORDER BY id), '[]'::json)::text "
+            "FROM bc_example.example_records WHERE label LIKE 'repeat-smoke-%'",
         ),
         "event": json_sql(
             project,
