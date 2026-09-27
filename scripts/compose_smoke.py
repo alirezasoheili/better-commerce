@@ -106,6 +106,8 @@ def sql(project, database, env, statement):
         env,
         "exec",
         "--no-TTY",
+        "--env",
+        "PGPASSWORD=" + env["BC_SMOKE_OPERATIONS_PASSWORD"],
         "postgres",
         "psql",
         "-X",
