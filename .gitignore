@@ -32,6 +32,8 @@ lcov.info
 # Machine-specific installation manifests
 /manifest.local.yaml
 /manifest.*.local.yaml
+/secrets/
+/.secrets/
 
 
 # -----------------------------------------------------------------------------

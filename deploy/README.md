@@ -6,6 +6,8 @@ Prerequisites: Docker with the Compose plugin. The checked-in [`manifest.yaml`](
 contains nonsecret settings and local secret references. Secret references use either
 `env: VARIABLE_NAME` or `file: ./relative/path`; file paths are resolved beside the
 manifest and one trailing line ending is removed.
+For file-backed secrets inside the repository, keep files in the ignored root
+`secrets/` or `.secrets/` directory. Secret files may also live outside the repository.
 
 Set `BC_OPERATIONS_PASSWORD`, `BC_EXAMPLE_PASSWORD`, `BC_DISPATCHER_PASSWORD`, and
 `BC_READINESS_PASSWORD` in the environment (or change the manifest references to

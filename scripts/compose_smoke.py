@@ -93,7 +93,9 @@ local:
             if any(secret in combined for secret in sentinels):
                 raise RuntimeError("secret value appeared in captured CLI output")
             if result.returncode:
-                raise RuntimeError("bc reconciliation failed; inspect the nonsecret CI job diagnostics")
+                raise RuntimeError(
+                    "bc reconciliation failed; secret-sentinel scan passed:\n" + combined.strip()
+                )
             if "is ready at" not in result.stdout:
                 raise RuntimeError("bc did not report successful readiness")
 

@@ -180,9 +180,9 @@ where
     run_compose(
         &context,
         "run owned migrations",
-        &["run", "--rm", "migrate"],
+        &["run", "--build", "--rm", "migrate"],
     )?;
-    run_compose(&context, "start API", &["up", "--detach", "api"])?;
+    run_compose(&context, "start API", &["up", "--detach", "--build", "api"])?;
 
     let ready_url = format!("http://127.0.0.1:{}/readyz", local.http_port);
     verify_ready(&ready_url).await?;
@@ -385,7 +385,14 @@ fn redacted_diagnostics(
     if message.is_empty() {
         return "Compose returned no diagnostic output".to_owned();
     }
-    message.chars().take(1200).collect()
+    let characters: Vec<char> = message.chars().collect();
+    let start = characters.len().saturating_sub(4000);
+    let suffix: String = characters[start..].iter().collect();
+    if start == 0 {
+        suffix
+    } else {
+        format!("[earlier diagnostics truncated] {suffix}")
+    }
 }
 
 async fn verify_ready(url: &str) -> Result<(), ReconcileError> {
