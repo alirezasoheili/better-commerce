@@ -60,6 +60,21 @@ struct Fixture {
     readiness_role: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct PendingEventSnapshot {
+    event_id: String,
+    event_type: String,
+    event_version: i16,
+    aggregate_type: String,
+    aggregate_id: i64,
+    aggregate_sequence: i64,
+    payload_schema_version: i16,
+    payload: String,
+    delivered_at: Option<String>,
+    dead_lettered_at: Option<String>,
+    dead_letter_reason: Option<String>,
+}
+
 impl Fixture {
     async fn new() -> TestResult<Self> {
         let admin_url = std::env::var("BC_TEST_ADMIN_DATABASE_URL")
@@ -121,6 +136,11 @@ impl Fixture {
         .await
     }
 
+    async fn migrate_without_example(&self, readiness_url: &str) -> TestResult {
+        migrate_installation(&self.operations_url, false, None, None, readiness_url).await?;
+        Ok(())
+    }
+
     async fn cleanup(self) -> TestResult {
         sqlx::query(&format!("DROP DATABASE \"{}\" WITH (FORCE)", self.database))
             .execute(&self.admin)
@@ -130,7 +150,7 @@ impl Fixture {
             &self.dispatcher_role,
             &self.readiness_role,
         ] {
-            sqlx::query(&format!("DROP ROLE \"{role}\""))
+            sqlx::query(&format!("DROP ROLE IF EXISTS \"{role}\""))
                 .execute(&self.admin)
                 .await?;
         }
@@ -171,24 +191,143 @@ async fn status(
 async fn module_migrations_have_independent_histories_and_rerun_cleanly() -> TestResult {
     let fixture = Fixture::new().await?;
     fixture.migrate().await?;
-    fixture.migrate().await?;
     let operations = PgPool::connect(&fixture.operations_url).await?;
-    let example_versions: (i64,) =
-        sqlx::query_as("SELECT count(*) FROM bc_example._sqlx_migrations")
-            .fetch_one(&operations)
-            .await?;
-    let shared_versions: (i64,) = sqlx::query_as("SELECT count(*) FROM bc_shared._sqlx_migrations")
-        .fetch_one(&operations)
-        .await?;
+    let example_before = migration_history(&operations, "bc_example").await?;
+    let shared_before = migration_history(&operations, "bc_shared").await?;
+    fixture.migrate().await?;
+    let example_after = migration_history(&operations, "bc_example").await?;
+    let shared_after = migration_history(&operations, "bc_shared").await?;
     let table_exists: (bool,) =
         sqlx::query_as("SELECT to_regclass('bc_example.example_records') IS NOT NULL")
             .fetch_one(&operations)
             .await?;
     operations.close().await;
     fixture.cleanup().await?;
-    assert_eq!(example_versions.0, 3);
-    assert_eq!(shared_versions.0, 1);
+    assert_eq!(example_before.len(), 3);
+    assert_eq!(shared_before.len(), 1);
+    assert_eq!(example_after, example_before);
+    assert_eq!(shared_after, shared_before);
     assert!(table_exists.0);
+    Ok(())
+}
+
+async fn migration_history(
+    operations: &PgPool,
+    schema: &str,
+) -> TestResult<Vec<(i64, bool, Vec<u8>)>> {
+    Ok(sqlx::query_as(&format!(
+        "SELECT version, success, checksum FROM {schema}._sqlx_migrations ORDER BY version"
+    ))
+    .fetch_all(operations)
+    .await?)
+}
+
+#[tokio::test]
+async fn absent_module_is_allowed_for_a_fresh_installation() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture
+        .migrate_without_example(&fixture.readiness_url)
+        .await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    let shared_count: (i64,) = sqlx::query_as("SELECT count(*) FROM bc_shared._sqlx_migrations")
+        .fetch_one(&operations)
+        .await?;
+    let example_schema_exists: (bool,) =
+        sqlx::query_as("SELECT to_regnamespace('bc_example') IS NOT NULL")
+            .fetch_one(&operations)
+            .await?;
+    operations.close().await;
+    fixture.cleanup().await?;
+    assert_eq!(shared_count.0, 1);
+    assert!(!example_schema_exists.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn initialized_module_removal_is_rejected_before_database_mutation() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.migrate().await?;
+    let operations = PgPool::connect(&fixture.operations_url).await?;
+    sqlx::query(
+        "INSERT INTO bc_example.example_records (id, label) OVERRIDING SYSTEM VALUE \
+         VALUES (91827364, 'preserve-business-state')",
+    )
+    .execute(&operations)
+    .await?;
+    sqlx::query(
+        "INSERT INTO bc_example.outbox_events \
+         (event_id, event_type, event_version, aggregate_type, aggregate_id, aggregate_sequence, \
+          payload_schema_version, payload, delivered_at, dead_lettered_at, dead_letter_reason) \
+         VALUES ('00000000-0000-0000-0000-000000000011', 'example.record_created', 1, \
+          'example_record', 91827364, 1, 1, '{\"record\":{\"id\":91827364,\"label\":\"preserve-business-state\"}}', \
+          NULL, NULL, NULL)",
+    )
+    .execute(&operations)
+    .await?;
+    let example_history_before = migration_history(&operations, "bc_example").await?;
+    let shared_history_before = migration_history(&operations, "bc_shared").await?;
+
+    let changed_readiness_password = "removal-attempt-must-not-reprovision";
+    let mut changed_readiness_url = Url::parse(&fixture.readiness_url)?;
+    changed_readiness_url
+        .set_password(Some(changed_readiness_password))
+        .map_err(|_| "invalid test password")?;
+    let error = migrate_installation(
+        &fixture.operations_url,
+        false,
+        None,
+        None,
+        changed_readiness_url.as_str(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("initialized module 'example' cannot be removed in M0")
+    );
+
+    // The prior readiness credential remains usable, proving the guard ran before
+    // credential reprovisioning as well as before migration and privilege changes.
+    let readiness = PgPool::connect(&fixture.readiness_url).await?;
+    readiness.close().await;
+    let changed_readiness = PgPool::connect(changed_readiness_url.as_str()).await;
+    assert!(changed_readiness.is_err());
+
+    let example_history_after = migration_history(&operations, "bc_example").await?;
+    let shared_history_after = migration_history(&operations, "bc_shared").await?;
+    let business: (i64, String) =
+        sqlx::query_as("SELECT id, label FROM bc_example.example_records WHERE id = 91827364")
+            .fetch_one(&operations)
+            .await?;
+    let event: PendingEventSnapshot = sqlx::query_as(
+        "SELECT event_id::text, event_type, event_version, aggregate_type, aggregate_id, \
+         aggregate_sequence, payload_schema_version, payload::text, delivered_at::text, \
+         dead_lettered_at::text, dead_letter_reason FROM bc_example.outbox_events \
+         WHERE event_id = '00000000-0000-0000-0000-000000000011'",
+    )
+    .fetch_one(&operations)
+    .await?;
+    operations.close().await;
+    fixture.cleanup().await?;
+
+    assert_eq!(example_history_after, example_history_before);
+    assert_eq!(shared_history_after, shared_history_before);
+    assert_eq!(business, (91827364, "preserve-business-state".into()));
+    assert_eq!(event.event_id, "00000000-0000-0000-0000-000000000011");
+    assert_eq!(event.event_type, "example.record_created");
+    assert_eq!(event.event_version, 1);
+    assert_eq!(event.aggregate_type, "example_record");
+    assert_eq!(event.aggregate_id, 91827364);
+    assert_eq!(event.aggregate_sequence, 1);
+    assert_eq!(event.payload_schema_version, 1);
+    assert_eq!(
+        event.payload,
+        "{\"record\": {\"id\": 91827364, \"label\": \"preserve-business-state\"}}"
+    );
+    assert!(event.delivered_at.is_none());
+    assert!(event.dead_lettered_at.is_none());
+    assert!(event.dead_letter_reason.is_none());
     Ok(())
 }
 

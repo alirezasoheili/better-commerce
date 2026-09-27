@@ -60,6 +60,13 @@ pub async fn migrate_installation(
         .await?;
     let mut connection = pool.acquire().await?;
 
+    // The installation database is authoritative for module lifecycle state. Check this
+    // before reprovisioning credentials, applying migrations, or changing grants so an
+    // unsupported removal cannot partially apply the desired state.
+    if !example_enabled && module_is_initialized(&mut connection, SCHEMA).await? {
+        return Err("initialized module 'example' cannot be removed in M0".into());
+    }
+
     provision_role(&mut connection, &ready_identity).await?;
     if let Some(example_identity) = &example_identity {
         provision_role(&mut connection, example_identity).await?;
@@ -177,6 +184,30 @@ pub async fn migrate_installation(
     connection.close().await?;
     pool.close().await;
     Ok(())
+}
+
+async fn module_is_initialized(
+    connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    schema: &str,
+) -> Result<bool, sqlx::Error> {
+    let history_table = format!("{schema}._sqlx_migrations");
+    let history_exists: (bool,) = sqlx::query_as("SELECT to_regclass($1) IS NOT NULL")
+        .bind(&history_table)
+        .fetch_one(&mut **connection)
+        .await?;
+    if !history_exists.0 {
+        return Ok(false);
+    }
+
+    // A successful SQLx migration is durable evidence of initialization. In particular,
+    // schema existence alone is insufficient because an empty schema can be left by an
+    // interrupted first installation.
+    let has_applied_migrations: (bool,) = sqlx::query_as(&format!(
+        "SELECT EXISTS (SELECT 1 FROM {schema}._sqlx_migrations WHERE success)"
+    ))
+    .fetch_one(&mut **connection)
+    .await?;
+    Ok(has_applied_migrations.0)
 }
 
 /// Stable, database-specific login names for one installation.
