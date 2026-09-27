@@ -252,6 +252,21 @@ def main():
             value = "TOP_SECRET_SHOULD_NEVER_APPEAR_" + secrets.token_urlsafe(24)
             secret_values[value] = name
             env[name] = value
+        env.update(
+            {
+                "BC_OPERATIONS_PASSWORD": env["BC_SMOKE_OPERATIONS_PASSWORD"],
+                "BC_EXAMPLE_PASSWORD": env["BC_SMOKE_EXAMPLE_PASSWORD"],
+                "BC_DISPATCHER_PASSWORD": env["BC_SMOKE_DISPATCHER_PASSWORD"],
+                "BC_READINESS_PASSWORD": env["BC_SMOKE_READINESS_PASSWORD"],
+                "BC_DATABASE_NAME": database,
+                "BC_HTTP_PORT": str(port),
+                "BC_MANIFEST_HOST_PATH": str(manifest).replace("\\", "/"),
+                "OPERATIONS_DATABASE_URL": f"postgres://postgres:unused@postgres:5432/{database}",
+                "EXAMPLE_RUNTIME_DATABASE_URL": f"postgres://example:unused@postgres:5432/{database}",
+                "DISPATCHER_DATABASE_URL": f"postgres://dispatcher:unused@postgres:5432/{database}",
+                "READINESS_DATABASE_URL": f"postgres://ready:unused@postgres:5432/{database}",
+            }
+        )
 
         try:
             first = run_reconcile(manifest, env)
