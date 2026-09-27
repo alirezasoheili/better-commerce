@@ -101,13 +101,15 @@ def volume_name(project, env):
 
 
 def sql(project, database, env, statement):
+    sql_env = env.copy()
+    sql_env["PGPASSWORD"] = env["BC_SMOKE_OPERATIONS_PASSWORD"]
     result = compose(
         project,
-        env,
+        sql_env,
         "exec",
         "--no-TTY",
         "--env",
-        "PGPASSWORD=" + env["BC_SMOKE_OPERATIONS_PASSWORD"],
+        "PGPASSWORD",
         "postgres",
         "psql",
         "-X",
@@ -194,6 +196,12 @@ def assert_pending_event(state, event_id, record_id, label):
         raise RuntimeError("distinctive outbox event was not retained exactly as a pending event")
     if not state["example_schema_exists"]:
         raise RuntimeError("initialized example schema disappeared")
+
+
+def assert_state_preserved(before, after, event_id, record_id, label, phase):
+    assert_pending_event(after, event_id, record_id, label)
+    if after != before:
+        raise RuntimeError(f"{phase} changed persisted state or volume identity")
 
 
 def ready(port):
@@ -290,9 +298,9 @@ def main():
                 raise RuntimeError("unchanged repeat reconciliation failed (secret output suppressed)")
             ready(port)
             after_repeat = snapshot(project, database, env, event_id, volume_name(project, env))
-            assert_pending_event(after_repeat, event_id, record_id, record_label)
-            if after_repeat != before_repeat:
-                raise RuntimeError("unchanged reconciliation changed persisted state or volume identity")
+            assert_state_preserved(
+                before_repeat, after_repeat, event_id, record_id, record_label, "unchanged reconciliation"
+            )
             print("Unchanged reconciliation preserved business, migration, outbox, and volume state.")
 
             api_before_config = container_id(project, env, "api")
@@ -306,9 +314,9 @@ def main():
                 raise RuntimeError("API container identity did not change after configuration update")
             ready(port)
             after_config = snapshot(project, database, env, event_id, volume_name(project, env))
-            assert_pending_event(after_config, event_id, record_id, record_label)
-            if after_config != before_repeat:
-                raise RuntimeError("configuration reconciliation changed persisted state or volume identity")
+            assert_state_preserved(
+                before_repeat, after_config, event_id, record_id, record_label, "configuration reconciliation"
+            )
             print("Supported configuration change recreated the API and preserved state.")
 
             api_before_removal = container_id(project, env, "api")
@@ -322,9 +330,9 @@ def main():
                 raise RuntimeError("API was recreated into the module-less desired state")
             ready(port)
             after_removal = snapshot(project, database, env, event_id, volume_name(project, env))
-            assert_pending_event(after_removal, event_id, record_id, record_label)
-            if after_removal != before_repeat:
-                raise RuntimeError("rejected module removal changed persisted state or volume identity")
+            assert_state_preserved(
+                before_repeat, after_removal, event_id, record_id, record_label, "rejected module removal"
+            )
             print("Initialized-module removal was rejected safely; prior API remained ready.")
             print("Compose repeat-reconciliation smoke passed.")
         finally:
