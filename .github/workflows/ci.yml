@@ -96,3 +96,41 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Run real local Compose reconciliation smoke
         run: python3 scripts/compose_smoke.py
+
+  m0-proof:
+    name: M0 architecture proof
+    if: ${{ always() }}
+    needs:
+      - contract-governance
+      - format
+      - check
+      - build
+      - test
+      - clippy
+      - local-compose-reconciliation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every M0 gate to succeed
+        env:
+          CONTRACT_GOVERNANCE_RESULT: ${{ needs.contract-governance.result }}
+          FORMAT_RESULT: ${{ needs.format.result }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          CLIPPY_RESULT: ${{ needs.clippy.result }}
+          COMPOSE_RESULT: ${{ needs.local-compose-reconciliation.result }}
+        run: |
+          for result in \
+            "$CONTRACT_GOVERNANCE_RESULT" \
+            "$FORMAT_RESULT" \
+            "$CHECK_RESULT" \
+            "$BUILD_RESULT" \
+            "$TEST_RESULT" \
+            "$CLIPPY_RESULT" \
+            "$COMPOSE_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "M0 architecture proof failed: required gate result was $result" >&2
+              exit 1
+            fi
+          done
+          echo "M0 architecture proof passed"
