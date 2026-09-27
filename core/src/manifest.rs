@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use semver::{Version, VersionReq};
 use serde::Deserialize;
+use std::path::PathBuf;
 
 const FOUNDATION_CONTRACT: &str = "foundation";
 
@@ -18,6 +19,33 @@ pub struct Manifest {
     pub release: Version,
     pub deployment_mode: DeploymentMode,
     pub modules: BTreeMap<String, ModuleInstallation>,
+    #[serde(default)]
+    pub local: Option<LocalDeployment>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalDeployment {
+    pub installation_id: String,
+    pub database_name: String,
+    pub http_port: u16,
+    pub secrets: LocalSecrets,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalSecrets {
+    pub operations_password: SecretReference,
+    pub example_password: SecretReference,
+    pub dispatcher_password: SecretReference,
+    pub readiness_password: SecretReference,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum SecretReference {
+    Environment { env: String },
+    File { file: PathBuf },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -46,6 +74,7 @@ pub struct ModuleMetadata {
 pub struct ValidatedManifest {
     pub deployment_mode: DeploymentMode,
     pub modules: BTreeMap<String, ModuleInstallation>,
+    pub local: Option<LocalDeployment>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -170,6 +199,7 @@ pub fn validate_manifest(
     Ok(ValidatedManifest {
         deployment_mode: manifest.deployment_mode,
         modules: manifest.modules,
+        local: manifest.local,
     })
 }
 

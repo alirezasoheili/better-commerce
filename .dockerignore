@@ -1,0 +1,13 @@
+.git
+target
+.codex
+.bc
+.env*
+manifest.*.local.yaml
+secrets
+**/secrets
+.secrets
+**/.secrets
+*.pem
+*.key
+*.log
