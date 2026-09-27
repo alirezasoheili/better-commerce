@@ -182,7 +182,11 @@ where
         "run owned migrations",
         &["run", "--build", "--rm", "migrate"],
     )?;
-    run_compose(&context, "start API", &["up", "--detach", "--build", "api"])?;
+    run_compose(
+        &context,
+        "start API",
+        &["up", "--detach", "--build", "--force-recreate", "api"],
+    )?;
 
     let ready_url = format!("http://127.0.0.1:{}/readyz", local.http_port);
     verify_ready(&ready_url).await?;

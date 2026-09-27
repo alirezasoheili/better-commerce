@@ -89,7 +89,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   local-compose-reconciliation:
-    name: Local Compose first-install smoke
+    name: Local Compose reconciliation smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
