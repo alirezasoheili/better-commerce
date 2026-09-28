@@ -10,3 +10,13 @@ routes:
       - docs/adr/0002-module-ownership-and-extraction-seam.md
       - docs/adr/0003-module-owned-ordered-outbox.md
       - https://github.com/alireza-constantin/better-commerce/issues/1
+  - id: m1-commerce-tracer-bullet
+    match:
+      milestone: M1
+    read:
+      - CONTEXT.md
+      - docs/specs/m1-commerce-tracer-bullet.md
+      - docs/adr/0004-m1-commerce-tracer-bullet.md
+      - docs/adr/0001-installation-isolation-and-reconciliation.md
+      - docs/adr/0002-module-ownership-and-extraction-seam.md
+      - docs/adr/0003-module-owned-ordered-outbox.md
