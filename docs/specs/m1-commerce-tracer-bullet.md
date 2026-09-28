@@ -316,7 +316,7 @@ PurchaseProgress is:
 | `GET /api/v1/purchase-attempts/{purchase_attempt_id}` | Associated Cart bearer | `200 PurchaseProgress` for every persisted state |
 | `GET /api/v1/orders/{order_id}/receipt` | Associated Cart bearer | `200` receipt DTO for an existing Order, with its actual state |
 
-Receipt is available when Order exists, including pending/failed, but UI labels a receipt as a successful purchase only after progress is succeeded. Authorized historical receipts remain available after Cart completes or later attempts occur on a previously unlocked Cart. Cart credential stays usable and Orders stores only CartId/association, never the secret. Progress read is read-only; workers ensure recovery without polling. Pending progress may return `Retry-After: 2`; frontend polling respects backoff.
+Receipt is available when Order exists, including pending/failed, but UI labels a receipt as a successful purchase only after progress is succeeded. Authorized historical receipts remain available after Cart completes or later attempts occur on a previously unlocked Cart. Cart credential stays usable and Orders stores only CartId/association, never the secret. Progress read is read-only; workers ensure recovery without polling. Pending progress may return a `Retry-After` header; frontend polling respects backoff.
 
 A different fingerprint under an authenticated existing key is `409 IDEMPOTENCY_KEY_CONFLICT`, with no new attempt or effects. Cart empty, no longer open, stale revision, ineligible merchandise, missing price, insufficient stock, arithmetic overflow, and reservation expiration discovered by orchestration become stable failed-attempt results after cleanup, rather than bypassing durable idempotency. Freeze failure records the corresponding code (`CART_EMPTY`, `CART_NOT_OPEN`, `CART_REVISION_CONFLICT`, or `CART_PURCHASE_IN_PROGRESS`); an already-completed Cart must not acquire another binding. `CART_PURCHASE_IN_PROGRESS` applies when another attempt owns the frozen Cart.
 
@@ -507,13 +507,13 @@ Secrets use the existing environment/file reference convention; extend local dep
 
 `/healthz` remains process liveness. `/readyz` returns existing success only when shared prerequisites and all enabled module requirements hold, including migrations/roles, scoped DB access, Pricing currency agreement, configured Payment adapter availability, valid admin-token configuration, and active scheduling of required M1 workers. Currency mismatch fails readiness and purchase admission without mutating Pricing state. Missing dependencies/invalid configuration fail startup/reconciliation before business mutations. A single unresolved payment or retrying attempt does not make the installation unready.
 
-Currency declaration lives in Pricing's manifest configuration; Inventory TTL lives in Inventory's configuration. Runtime scheduling defaults are Orders every 2 seconds and Inventory expiration every 5 seconds, with immediate due-work passes after startup. Engineers may expose positive bounded intervals in runtime configuration; changes affect latency, not recovery meaning or reservation validity. Do not add a general scheduler.
+Currency declaration lives in Pricing's manifest configuration; Inventory TTL lives in Inventory's configuration. Runtime periodically invokes Orders recovery and Inventory expiration. Cadence, batch size, concurrency, claims/leases, backoff values, and jitter are implementation choices. Scheduling must not determine reservation validity or business outcome. Do not add a general scheduler.
 
 ### 9.2 Orders recovery and Inventory expiration
 
 Orders application selects due nonterminal attempts and owns recoverability, next action, stable retry identities, backoff, and terminal meaning. Runtime schedules bounded batches of that application operation and `resume_purchase`; it neither interprets Order state nor queries module tables to decide payment/cleanup policy.
 
-Dependency failure uses bounded exponential backoff (initial 2 seconds, maximum 60 seconds, optional jitter), retaining the same facts. There is no maximum elapsed-time rule that changes an unresolved payment into failure or cancels protected stock. Error/invariant-stalled attempts remain diagnostically visible with safe limited retry, not hot loops. Scheduling must eventually revisit due work and avoid starving finalization/cleanup behind a large backlog. Concrete batch size, parallelism, lease technique, and backoff storage are engineering choices.
+Dependency failure retries retain the same facts and must avoid hot loops. Elapsed time must never turn an unresolved payment into decline or failure or cancel protected stock. Error/invariant-stalled attempts remain diagnostically visible with safe limited retry. Retries must eventually revisit due work and avoid starving finalization/cleanup behind a large backlog. Backoff storage is an implementation choice.
 
 Inventory owns a bounded expiration operation over overdue ordinary reservations. It atomically transitions/releases each at most once, skipping protected reservations. Runtime supplies cadence only. State-changing Inventory operations independently enforce deadline validity, so correctness does not depend on expiration cadence. Multiple runtimes may schedule the same work safely. Shutdown stops taking new work and allows bounded in-flight completion; unconfirmed effects remain recoverable after restart.
 
@@ -672,7 +672,7 @@ ADR 0004 records the settled context boundaries and consumer direction; Variant 
 
 M1 is done when:
 
-1. All five modules and durable Fake Payment are wired into existing installation reconciliation/startup with owned schemas/migrations/roles and readiness; M0 proofs continue to pass.
+1. All five bounded-context modules are wired into existing installation reconciliation/startup with module-owned schemas, migrations, runtime identities, and readiness. Durable Fake Payment is wired as Orders infrastructure, using Orders-owned infrastructure persistence with an independent transaction boundary and no separate schema, migrations, or runtime identity; M0 proofs continue to pass.
 2. Domain/application/HTTP contracts in this spec are implemented, including snapshot fidelity, valid zero amounts, checked arithmetic, atomic Cart/stock guards, and stable public error/progress semantics.
 3. Positive, zero, declined, and unresolved purchase paths execute/recover under the prescribed ordering; key and operation replay never duplicate acquisition, Order, collection, consumption, or completion.
 4. Every required cleanup/finalization and protection ambiguity test passes with live PostgreSQL and fresh-runtime restart. No browser presence is needed for recovery.
