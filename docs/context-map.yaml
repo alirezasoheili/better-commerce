@@ -20,3 +20,18 @@ routes:
       - docs/adr/0001-installation-isolation-and-reconciliation.md
       - docs/adr/0002-module-ownership-and-extraction-seam.md
       - docs/adr/0003-module-owned-ordered-outbox.md
+  - id: m2-runtime-plugin-platform
+    match:
+      milestone: M2
+    read:
+      - CONTEXT.md
+      - docs/specs/m2-runtime-plugin-platform.md
+      - docs/adr/0005-m2-runtime-plugin-platform.md
+      - docs/plugin-platform/decision-ledger.md
+      - docs/plugin-platform/wit-architecture.md
+      - docs/plugin-platform/plugin-manifest.md
+      - docs/plugin-platform/lifecycle.md
+      - docs/adr/0001-installation-isolation-and-reconciliation.md
+      - docs/adr/0002-module-ownership-and-extraction-seam.md
+      - docs/adr/0003-module-owned-ordered-outbox.md
+      - docs/adr/0004-m1-commerce-tracer-bullet.md

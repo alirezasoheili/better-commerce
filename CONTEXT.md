@@ -21,3 +21,19 @@
 - **Order:** The historical record of purchased merchandise and its monetary obligation.
 - **Paid Order:** An Order whose monetary obligation is satisfied; Inventory and Cart finalization may still be pending.
 - **Successful purchase:** A purchase whose monetary obligation is satisfied, Inventory is consumed, and Cart is completed.
+
+## M2 plugin-platform language
+
+- **Plugin:** A trusted first-party installable extension package. A Plugin is not a bounded-context Module and does not own or redefine BC core commerce semantics.
+- **Plugin package:** One immutable SemVer release containing `plugin.yaml` and optional backend WASM, migrations, UI and assets.
+- **Plugin ID:** Stable immutable URL-safe identity used for installation, routing, storage and registry records.
+- **Plugin backend:** The optional WebAssembly Component (`backend.wasm`) hosted in-process by Wasmtime.
+- **WIT contract:** The versioned WebAssembly Component Model interface that defines a BC/plugin ABI boundary.
+- **Host API:** A BC-provided WIT import used by a plugin for stable services such as context, config, DB, files, jobs, logging, audit or core domain operations.
+- **Extension point:** A BC-defined synchronous contract through which plugins provide or contribute behavior. Extension points are either single-provider or multi-contributor and own their failure semantics.
+- **Provider:** The configured implementation selected for a single-provider extension point.
+- **Contributor:** One of zero or more active implementations invoked in deterministic order for a multi-contributor extension point.
+- **PluginContext:** Stable BC-resolved invocation context such as request ID, locale/currency and authenticated merchant/customer identity when present; it is not a raw framework/session object.
+- **Managed plugin copy:** The validated package version copied into BC-owned installation storage and used for activation.
+- **Plugin data directory:** Plugin-scoped writable filesystem storage for large/binary runtime data; relational business state remains in PostgreSQL.
+- **Unavailable plugin:** An installed/enabled plugin that failed compatibility, configuration, migration, initialization or health/runtime recovery and is therefore not callable while BC itself remains available.

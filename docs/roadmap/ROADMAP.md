@@ -48,6 +48,33 @@ Product
 
 Plus the thinnest possible storefront/admin surfaces required to prove the architecture.
 
+M1 remains governed by ADR 0004 and its accepted specification/ticket graph. Runtime plugins remain outside M1.
+
+---
+
+## M2 — Runtime Plugin Platform
+
+Goal:
+Add a DNN-like installable extension platform without rebuilding Better Commerce or introducing per-plugin services.
+
+Includes:
+
+- Wasmtime-hosted WebAssembly Components;
+- independently versioned WIT plugin contracts and official Rust SDK;
+- local package install/upgrade/remove plus live enable/disable/config;
+- plugin migrations, config/secrets and scoped files;
+- plugin HTTP/UI bridge;
+- PostgreSQL durable plugin jobs/schedules/event delivery;
+- explicit commerce extension points including payment, pricing, shipping, checkout and structured storefront metadata/SEO;
+- backup/restore integration, operator status, plugin CLI and developer hot reload/conformance tooling;
+- realistic payment, dynamic pricing, SMS and UI/data reference plugins.
+
+Exit condition:
+
+All four reference plugins pass integrated restart, lost-response, compatibility, migration, job/event, UI and backup/restore acceptance while preserving M0/M1 module/outbox invariants. A deployment still requires only the BC executable, PostgreSQL and managed plugin package/data state; no Redis/message broker/plugin sidecars are required.
+
+See `docs/specs/m2-runtime-plugin-platform.md` and `docs/plugin-platform/implementation-roadmap.md`.
+
 ---
 
 ## Later
@@ -61,3 +88,4 @@ Promotions V1
 Search V1
 Customers V1
 Operational tooling
+Third-party plugin trust/marketplace only when product demand justifies it
