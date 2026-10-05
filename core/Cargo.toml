@@ -19,6 +19,11 @@ sqlx.workspace = true
 url = "2"
 percent-encoding = "2"
 sha2 = "0.10"
+base64 = "0.22"
+subtle = "2.6"
+getrandom = "0.2"
+http-body-util = "0.1"
+tower-http = { version = "0.6", features = ["fs"] }
 
 [dev-dependencies]
 tower.workspace = true

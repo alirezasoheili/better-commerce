@@ -1,0 +1,15 @@
+{
+  "name": "better-commerce-storefront",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "npm@11.18.0",
+  "engines": { "node": "24.19.0", "npm": "11.18.0" },
+  "scripts": {
+    "typecheck": "astro check",
+    "build": "astro build && node ../scripts/csp-hashes.mjs",
+    "test": "node --experimental-strip-types --test ../shared/wire.test.ts"
+  },
+  "dependencies": { "astro": "7.3.5", "@astrojs/react": "7.0.0", "react": "19.3.0", "react-dom": "19.3.0" },
+  "devDependencies": { "@astrojs/check": "0.9.10", "typescript": "5.9.3", "@types/react": "19.3.0", "@types/react-dom": "19.3.0" }
+}

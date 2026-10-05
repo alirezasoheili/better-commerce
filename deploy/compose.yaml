@@ -45,6 +45,10 @@ services:
       EXAMPLE_RUNTIME_DATABASE_URL: ${EXAMPLE_RUNTIME_DATABASE_URL:?example URL is required}
       READINESS_DATABASE_URL: ${READINESS_DATABASE_URL:?readiness URL is required}
       PORT: "3000"
+      BC_RESOLVED_ADMIN_TOKEN: ${BC_ADMIN_TOKEN:-}
+      BC_HTTP_LOOPBACK_PROXY_IP: ${BC_HTTP_LOOPBACK_PROXY_IP:-}
+      STOREFRONT_DIST: /app/storefront
+      ADMIN_DIST: /app/admin
     ports:
       - "127.0.0.1:${BC_HTTP_PORT:?HTTP port is required}:3000"
     volumes:

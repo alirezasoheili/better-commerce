@@ -11,3 +11,7 @@ secrets
 *.pem
 *.key
 *.log
+**/node_modules
+**/dist
+**/.astro
+output

@@ -1,0 +1,18 @@
+---
+import Availability from '../components/Availability';
+import '../styles.css';
+---
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Better Commerce — Storefront</title></head>
+  <body>
+    <header><a class="brand" href="/">Better Commerce</a><a href="/admin">Merchant admin <span aria-hidden="true">↗</span></a></header>
+    <main>
+      <p class="eyebrow">Storefront</p>
+      <h1>A place for<br />what comes next.</h1>
+      <p class="intro">The shop is being prepared. Products will appear here when the catalog is available.</p>
+      <Availability client:load />
+    </main>
+    <footer>Better Commerce <span>Merchant installation</span></footer>
+  </body>
+</html>
