@@ -66,7 +66,7 @@ This ledger compresses the plugin-platform grilling session into durable rules. 
 
 38. Plugin config/secrets are stored by BC. Config schema is deliberately small (`string`, `secret`, `boolean`, `integer`, `number`, `enum` plus basic constraints/defaults); complex plugin configuration belongs in plugin tables/UI.
 39. Secrets are encrypted at rest with a deployment key stored outside the database. Restoring encrypted config requires the same key; normal export redacts secrets and does not export plaintext secrets.
-40. Candidate configuration is basic-schema validated and then plugin-validated before persistence. After save BC calls `config_changed()`; failure is reported without transactional rollback machinery.
+40. Candidate configuration is basic-schema validated and then plugin-validated before persistence. When an active runtime instance exists, BC calls `config_changed()` after save; otherwise the saved config is consumed by the next activation. Callback failure is reported without transactional rollback machinery.
 41. Plugin errors use stable machine-readable structured errors and separate safe user messages from technical details. BC owns actual retry decisions.
 42. BC enriches plugin logs/audit records with plugin ID/version and request/job/event/user context where available. V1 has no custom plugin metrics API; BC measures invocation health externally.
 

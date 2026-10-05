@@ -41,6 +41,9 @@ wit:
   exports:
     - better-commerce:plugin-lifecycle/lifecycle@1.0.0
     - better-commerce:plugin-http/handler@1.0.0
+    - better-commerce:plugin-events/consumer@1.0.0
+    - better-commerce:plugin-jobs/handler@1.0.0
+    - better-commerce:plugin-cli/command@1.0.0
     - better-commerce:payments/provider@1.0.0
 
 extensions:
