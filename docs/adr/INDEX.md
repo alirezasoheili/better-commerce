@@ -4,3 +4,4 @@
 - [ADR 0002: Module ownership and extraction seam](0002-module-ownership-and-extraction-seam.md)
 - [ADR 0003: Module-owned ordered outbox](0003-module-owned-ordered-outbox.md)
 - [ADR 0004: M1 commerce tracer bullet and recoverable purchase orchestration](0004-m1-commerce-tracer-bullet.md)
+- [ADR 0005: M2 runtime plugin platform: Wasmtime components and explicit commerce extension points](0005-m2-runtime-plugin-platform.md)
