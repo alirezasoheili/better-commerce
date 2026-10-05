@@ -230,10 +230,12 @@ fn invalid_token_and_origin_configuration_errors_are_redacted() {
         "not base64url",
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     ] {
-        let error =
-            HttpRuntime::from_resolved_token(&configuration("http://localhost:3000", None), invalid)
-                .err()
-                .unwrap();
+        let error = HttpRuntime::from_resolved_token(
+            &configuration("http://localhost:3000", None),
+            invalid,
+        )
+        .err()
+        .unwrap();
         assert!(!format!("{error:?}").contains(invalid) || invalid.is_empty());
     }
     let config = HttpConfiguration {
