@@ -1,6 +1,6 @@
 # M2 — Runtime plugin platform specification
 
-Status: architecture approved in grilling; repository publication proposed.
+Status: accepted architecture for M2.
 
 ## 1. Goal
 
@@ -65,9 +65,9 @@ Persistent correctness-critical state belongs in PostgreSQL or plugin storage, n
 
 ### 3.2 ABI
 
-WIT / WebAssembly Component Model contracts are the sole plugin ABI source of truth. Each interface is independently SemVer-versioned. A BC release advertises the exact interface versions it implements; V1 does not load compatibility adapters for older interface versions.
+WIT / WebAssembly Component Model contracts are the sole plugin ABI source of truth. Compatibility is versioned at the WIT package level. Contracts that need independent compatibility evolution live in independently versioned packages rather than sharing one giant package. Exact interface references use the qualified `namespace:package/interface@package-version` form. A BC release advertises the exact interface references it implements; V1 does not load compatibility adapters for older package versions.
 
-The compiled component's imports/exports must match `plugin.yaml`. Descriptor/component drift is rejected before activation.
+The compiled component's imports/exports must match `plugin.yaml`. Descriptor/component drift is rejected before activation. Semantic declarations are validated too: declaring routes requires the plugin HTTP export; jobs require the jobs export; event subscriptions require the events export; CLI commands require the CLI export; each commerce extension declaration requires its corresponding extension export; and any backend component must export lifecycle. Backend-less/UI-only packages declare none of those backend-only capabilities.
 
 Rust is the supported V1 backend language. Generated Rust bindings plus an official SDK are the normal authoring surface. Plugins do not depend on `better-commerce-core` Rust crates directly.
 
@@ -232,12 +232,14 @@ Save flow:
 ```text
 candidate values
 → descriptor validation
-→ plugin validate_config(candidate)
+→ backend exists?
+   ├─ no  → descriptor validation is sufficient
+   └─ yes → call validate_config(candidate) on the active instance or, when no active instance exists, on a fresh transient validation instance
 → persist config/secrets
-→ config_changed()
+→ if an active runtime instance exists, call config_changed()
 ```
 
-Validation failure rejects the save. A later `config_changed()` failure is reported and can make behavior degraded/unavailable as appropriate, but V1 does not build distributed rollback of the already-saved config.
+`validate_config(candidate)` is explicitly callable before `initialize()` on a fresh transient instance and must receive the candidate values directly; validation therefore does not require the plugin to already be active or the candidate to already be stored. The transient validation instance is discarded after validation. Validation failure rejects the save. If no active runtime exists, a valid save is persisted and consumed by the next activation. A later `config_changed()` failure on an active plugin is reported and can make behavior degraded/unavailable as appropriate, but V1 does not build distributed rollback of the already-saved config.
 
 Secrets are encrypted at rest with a deployment-level key supplied outside the database. Normal config export redacts secrets. Plaintext secret export is not a normal supported operation. Restore of encrypted secrets requires the corresponding deployment key.
 
@@ -264,7 +266,7 @@ Plugin migrations may not alter BC-owned core tables or add triggers to core tab
 
 ### 8.2 Core data access
 
-Trusted V1 plugins may directly read core tables. This is an intentional coupling and is covered by plugin BC compatibility ranges and coordinated CI.
+Trusted V1 plugins may directly read core tables. Plugin-owned tables may also reference stable core IDs with foreign keys. This is intentional physical-schema coupling and is covered by plugin BC compatibility ranges and coordinated CI. ADR 0002's module-to-module extraction seam remains intact, but a plugin that takes this direct-read/FK option is not transparently insulated from a future core schema move or module extraction; such a change may require the plugin to be upgraded, migrated or disabled.
 
 Canonical core state mutation is performed through BC domain host APIs wherever it can affect invariants, state machines, events, snapshots or idempotency. Arbitrary direct SQL updates to core business state are not the supported plugin contract. Holding a plugin DB transaction open across external network calls is strongly discouraged by SDK/docs but is not technically prohibited in trusted V1.
 
@@ -314,18 +316,36 @@ Autonomous infinite/background loops inside WASM are unsupported. Long-running/r
 
 Core business events remain owned by core modules and use their transactional outboxes. Plugin handling is always post-commit; synchronous business decisions belong to extension points.
 
-Delivery semantics:
+The ADR 0003 handoff boundary is preserved explicitly:
 
-- direct host → WASM call, not HTTP-to-self;
+```text
+core module transaction + module outbox commit
+→ shared outbox dispatcher
+→ plugin EventDelivery adapter
+→ transactionally fan out durable plugin-delivery rows for matching active subscriptions
+→ commit plugin-delivery rows
+→ acknowledge acceptance to the core outbox
+
+later:
+plugin delivery worker
+→ direct WASM event handler invocation
+→ success / retry / dead-letter
+```
+
+The fan-out is idempotent, with a uniqueness key equivalent to `(source_event_id, plugin_id, event_type, event_version)`. The core outbox is therefore not held unpublished by a slow, disabled or broken plugin after the durable downstream handoff has succeeded.
+
+Plugin-delivery semantics:
+
+- worker → WASM call is direct, not HTTP-to-self;
 - at-least-once;
-- stable event ID;
-- mark delivered only after handler success;
+- original stable source event ID is preserved;
+- plugin delivery is marked complete only after handler success;
 - plugin can classify a failure as non-retryable, causing immediate dead-letter;
-- per-aggregate ordering preserved;
-- failure for one aggregate does not block unrelated aggregates;
+- ordering is preserved per plugin and aggregate; a dead-lettered delivery blocks later deliveries for that same plugin/aggregate until explicit operator retry/skip resolution;
+- failure for one plugin/aggregate does not block unrelated aggregates or other plugins;
 - original event ID is preserved on manual replay;
-- disabled plugins retain queued deliveries, while TTL continues to elapse;
-- removing a subscription on upgrade makes old queued deliveries for that removed subscription obsolete/cancelled;
+- disabled plugins retain already-fanned-out deliveries, while TTL continues to elapse;
+- removing a subscription on upgrade makes queued deliveries for that removed subscription obsolete/cancelled;
 - plugins do not publish canonical BC events and V1 has no plugin-to-plugin event bus.
 
 ## 10. HTTP and UI

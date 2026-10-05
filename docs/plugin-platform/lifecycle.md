@@ -105,15 +105,25 @@ candidate config
   ↓
 descriptor/basic validation
   ↓
-plugin.validate_config(candidate)
-  ├─ invalid → reject, stored config unchanged
-  └─ valid
+backend.wasm present?
+  ├─ no → descriptor validation is sufficient
+  └─ yes
+       ↓
+    active instance available?
+       ├─ yes → serialized validate_config(candidate) on active instance
+       └─ no  → instantiate fresh transient validation instance → validate_config(candidate) → discard it
+  ↓
+valid?
+  ├─ no → reject, stored config unchanged
+  └─ yes
        ↓
     persist values / encrypted secrets
        ↓
-    config_changed()
-       ├─ success → remain active
-       └─ failure → record plugin error; no automatic config rollback
+    active runtime instance exists?
+       ├─ no → next activation consumes stored config
+       └─ yes → config_changed()
+                    ├─ success → remain active
+                    └─ failure → record plugin error; no automatic config rollback
 ```
 
 ## Install
@@ -176,7 +186,7 @@ Running jobs hold a lease/heartbeat. After BC crashes, expired leases become rec
 
 ### Events
 
-Outbox publication stays post-commit. A delivery is acknowledged only after the plugin handler returns success. Replay preserves the original event ID.
+Outbox publication stays post-commit and preserves ADR 0003's acceptance boundary. The plugin `EventDelivery` adapter first commits idempotent downstream plugin-delivery rows for matching subscriptions, then acknowledges the core outbox. A plugin worker later invokes WASM. Plugin-delivery completion is recorded only after handler success; retry/dead-letter state belongs to the downstream delivery row, and replay preserves the original source event ID. A broken plugin therefore does not keep the core module outbox unpublished after durable fan-out.
 
 ### External provider ambiguity
 

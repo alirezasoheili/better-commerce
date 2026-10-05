@@ -14,7 +14,7 @@ This ledger compresses the plugin-platform grilling session into durable rules. 
 
 4. Backend plugins are WebAssembly Components hosted in-process by Wasmtime. Installing a plugin never rebuilds Better Commerce and does not require a sidecar service, process, container or port.
 5. WIT / the WebAssembly Component Model is the canonical plugin ABI source of truth. Protobuf remains available for non-plugin external contracts but does not duplicate plugin contracts.
-6. WIT packages/interfaces are independently SemVer-versioned. V1 supports only the interface versions shipped by that BC release; there are no compatibility shims for older WIT versions.
+6. WIT compatibility is package-versioned. Independently evolving contracts live in independently versioned WIT packages and are referenced as `namespace:package/interface@package-version`. V1 supports only the qualified interface references shipped by that BC release; there are no compatibility shims for older WIT package versions.
 7. Rust is the officially supported V1 backend authoring language. The ABI stays language-neutral so future languages can target the same WIT contracts.
 8. Each plugin has at most one `backend.wasm`. One long-lived instance is active per plugin and all invocations are serialized in V1. A timeout/trap discards the instance and recovery creates a new instance and reruns `initialize()`.
 9. One global plugin resource policy covers execution timeout, Wasmtime compute/fuel/epoch policy and memory limits. Repeated traps/timeouts can open one simple per-plugin circuit breaker.
@@ -40,7 +40,7 @@ This ledger compresses the plugin-platform grilling session into durable rules. 
 
 21. PostgreSQL remains authoritative. BC owns one `sqlx::Pool`; WASM plugins use a thin host DB API rather than owning independent PostgreSQL pools/credentials.
 22. Plugins own their tables/migrations and may create plugin-owned indexes, constraints, foreign keys to core tables, triggers on plugin-owned tables and SQL functions. They may not alter core-owned tables or add triggers to them.
-23. Direct SQL reads of core tables are allowed for trusted first-party V1 plugins and intentionally couple the plugin to the BC schema/compatibility range. Core state mutation is not a supported arbitrary-SQL contract: canonical state changes use BC domain host APIs so invariants, snapshots, idempotency and events remain authoritative.
+23. Direct SQL reads of core tables and plugin-owned foreign keys to stable core IDs are allowed for trusted first-party V1 plugins and intentionally couple the plugin to the BC physical schema/compatibility range. ADR 0002's module-to-module extraction seam remains intact, but such plugins may need upgrade/migration/disable when referenced core storage moves. Core state mutation is not a supported arbitrary-SQL contract: canonical state changes use BC domain host APIs so invariants, snapshots, idempotency and events remain authoritative.
 24. A plugin may start its own explicit DB transaction through the DB host API. It never implicitly joins a caller/core transaction.
 25. Plugin business/filesystem state uses PostgreSQL for relational state and a plugin-scoped writable data directory for large/binary files. Packaged assets are read-only.
 
@@ -48,7 +48,7 @@ This ledger compresses the plugin-platform grilling session into durable rules. 
 
 26. Durable plugin jobs, event deliveries and schedules use one PostgreSQL-backed worker system. No Redis, NATS, RabbitMQ or separate broker is required.
 27. Jobs/events are at-least-once. Stable IDs/idempotency keys are used where side effects can duplicate. Running jobs use leases/heartbeats so expired work is reclaimed after process failure.
-28. Events remain post-commit. Core writes its own transactional outbox first; plugin delivery happens later by direct WASM invocation. Per-aggregate ordering is preserved while unrelated aggregates can advance independently.
+28. Events remain post-commit. Core writes its transactional outbox first; the existing `EventDelivery` boundary acknowledges only after an idempotent PostgreSQL fan-out has durably created downstream plugin-delivery rows for matching subscriptions. Plugin workers later invoke WASM handlers from those rows. Core outbox publication therefore does not wait for plugin execution; plugin delivery remains at-least-once and ordered per plugin/aggregate while unrelated aggregates/plugins can advance independently.
 29. Retries/backoff, dead-lettering, manual retry, optional TTL, queued cancellation, simple ordered job chains, static recurring schedules and optional progress/result metadata are V1 capabilities. No DAG/workflow engine is introduced.
 30. Disabled plugins retain queued durable work; TTL continues to elapse. Removed subscriptions make obsolete old queued deliveries; incompatible old job types dead-letter rather than being silently remapped.
 

@@ -33,15 +33,15 @@ package:
 
 wit:
   imports:
-    - better-commerce:host-context@1.0.0
-    - better-commerce:host-config@1.0.0
-    - better-commerce:host-db@1.0.0
-    - better-commerce:host-log@1.0.0
-    - better-commerce:orders@1.0.0
+    - better-commerce:host-context/context@1.0.0
+    - better-commerce:host-config/config@1.0.0
+    - better-commerce:host-db/database@1.0.0
+    - better-commerce:host-log/logging@1.0.0
+    - better-commerce:orders/orders@1.0.0
   exports:
-    - better-commerce:plugin-lifecycle@1.0.0
-    - better-commerce:plugin-http@1.0.0
-    - better-commerce:payments@1.0.0
+    - better-commerce:plugin-lifecycle/lifecycle@1.0.0
+    - better-commerce:plugin-http/handler@1.0.0
+    - better-commerce:payments/provider@1.0.0
 
 extensions:
   payments:
@@ -82,6 +82,7 @@ jobs:
         payment_operation_id:
           type: string
           required: true
+    - name: reconciliation-sweep
   schedules:
     - id: reconciliation-sweep
       job: reconciliation-sweep
@@ -97,7 +98,8 @@ cli:
 
 events:
   subscriptions:
-    - order.paid
+    - type: order.paid
+      version: 1
 ```
 
 ## Identity
@@ -115,7 +117,7 @@ events:
 
 `requires.better_commerce` is a SemVer range. `requires.capabilities` lists BC capabilities/modules that must exist for activation.
 
-`wit.imports` and `wit.exports` list exact versioned WIT interfaces. BC validates them against component metadata and the host's supported interface set before instantiation.
+`wit.imports` and `wit.exports` list exact qualified WIT interface references in `namespace:package/interface@package-version` form. BC validates them against component metadata and the host's supported interface set before instantiation. WIT compatibility versions packages; independently evolving BC contracts therefore use separate packages.
 
 ## Package declarations
 
@@ -133,7 +135,7 @@ Routes are only declarations needed for host routing/auth classification. The pl
 
 Allowed mounts:
 
-- `extension-api` → under `/extensions/{plugin-id}/...`
+- `extension-api` → under `/extensions/{plugin-id}/api/*`
 - `public` → under `/plugins/{plugin-id}/...`
 
 Allowed auth classes: `public`, `customer`, `merchant`.
@@ -169,4 +171,4 @@ Commands use simple typed args parsed/validated by BC. Plugin returns structured
 
 ## Events
 
-Subscriptions are deduplicated during validation. Core event names/versions are BC-owned; plugins cannot publish new canonical BC event types through the descriptor.
+Subscriptions declare both BC-owned event type and event schema version and are deduplicated during validation. A subscription is unique within a plugin by `(type, version)`. Core event names/versions are BC-owned; plugins cannot publish new canonical BC event types through the descriptor. Durable fan-out uses the source event ID plus plugin ID/type/version as its idempotency identity.

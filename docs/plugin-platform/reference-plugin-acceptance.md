@@ -54,13 +54,14 @@ Must demonstrate:
 Must demonstrate:
 
 - core commits business event/outbox before plugin handling;
+- outbox `EventDelivery` adapter durably fans out the SMS plugin delivery and acknowledges the core outbox before WASM execution; a broken SMS handler cannot hold the core outbox unpublished;
 - event handler enqueues durable send job;
 - stable event/job/reference ID prevents duplicate send where provider supports idempotency or plugin records it;
 - BC crash after provider accepts send but before completion record is safe under at-least-once rules;
 - retries/backoff/dead-letter/manual retry work;
 - disabling plugin retains queue; TTL can expire while disabled;
 - re-enable resumes eligible work;
-- failure for one aggregate does not block unrelated aggregate event progression.
+- failure/dead-letter for one plugin aggregate blocks only that plugin/aggregate's later deliveries until explicit resolution and does not block unrelated aggregates, other plugins, or the already-accepted core outbox.
 
 ## UI/data proof
 

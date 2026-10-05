@@ -5,28 +5,29 @@ WIT is the canonical plugin ABI. Do not mirror these contracts in Protobuf or ex
 ## Naming/version rules
 
 - Namespace: `better-commerce:*`.
-- Every package/interface is independently SemVer-versioned.
-- Stable interfaces start at `1.0.0` when committed as supported V1 contracts.
-- Experimental interfaces use an explicitly experimental package name and `0.x` versions, for example `better-commerce:experimental-search@0.1.0`; they carry no compatibility promise.
-- BC supports the exact interface versions shipped with that BC release in V1; no old-version adapters are required.
-- `plugin.yaml` declares exact imports/exports and package validation compares them with component metadata.
+- WIT SemVer is attached to packages. Contracts that need independent compatibility evolution live in separate packages.
+- Exact interface references use `namespace:package/interface@package-version`.
+- Stable packages start at `1.0.0` when committed as supported V1 contracts.
+- Experimental contracts use an explicitly experimental package name and `0.x` versions, for example `better-commerce:experimental-search/search@0.1.0`; they carry no compatibility promise.
+- BC supports the exact qualified interface references shipped with that BC release in V1; no old-version adapters are required.
+- `plugin.yaml` declares exact qualified imports/exports and package validation compares them with component metadata.
 
 ## Host imports available to plugins
 
 | Package | Interface purpose |
 | --- | --- |
-| `better-commerce:host-context@1.0.0` | Stable invocation/request identity and locale/currency/deployment context. |
-| `better-commerce:host-config@1.0.0` | Read config/secrets made available by BC. Candidate-config validation receives candidate values through lifecycle export rather than mutating stored config. |
-| `better-commerce:host-db@1.0.0` | Query/execute, pagination-friendly row values, explicit plugin transactions, statement timeout; backed by BC `sqlx::Pool`. |
-| `better-commerce:host-files@1.0.0` | Read-only package assets, scoped writable plugin data/temp file handles, metadata; no arbitrary host paths. |
-| `better-commerce:host-jobs@1.0.0` | Enqueue durable jobs/chains, optional idempotency/TTL, progress/result reporting for current job where applicable. |
-| `better-commerce:host-log@1.0.0` | Structured logging; BC adds plugin/invocation metadata. |
-| `better-commerce:host-audit@1.0.0` | Structured audit entry emission. |
-| `better-commerce:catalog@1.0.0` | Published stable catalog reads/mutations required by plugins; core invariants remain in Catalog. |
-| `better-commerce:pricing-core@1.0.0` | Published pricing reads/operations that are not the pricing-contributor callback itself. |
-| `better-commerce:inventory@1.0.0` | Published inventory operations required by plugins; no direct arbitrary mutation contract. |
-| `better-commerce:orders@1.0.0` | Published order/purchase operations safe for plugin use. |
-| `better-commerce:customers@1.0.0` | Published customer operations when that context exists. |
+| `better-commerce:host-context/context@1.0.0` | Stable invocation/request identity and locale/currency/deployment context. |
+| `better-commerce:host-config/config@1.0.0` | Read config/secrets made available by BC. Candidate-config validation receives candidate values through lifecycle export rather than mutating stored config. |
+| `better-commerce:host-db/database@1.0.0` | Query/execute, pagination-friendly row values, explicit plugin transactions, statement timeout; backed by BC `sqlx::Pool`. |
+| `better-commerce:host-files/files@1.0.0` | Read-only package assets, scoped writable plugin data/temp file handles, metadata; no arbitrary host paths. |
+| `better-commerce:host-jobs/jobs@1.0.0` | Enqueue durable jobs/chains, optional idempotency/TTL, progress/result reporting for current job where applicable. |
+| `better-commerce:host-log/logging@1.0.0` | Structured logging; BC adds plugin/invocation metadata. |
+| `better-commerce:host-audit/audit@1.0.0` | Structured audit entry emission. |
+| `better-commerce:catalog/catalog@1.0.0` | Published stable catalog reads/mutations required by plugins; core invariants remain in Catalog. |
+| `better-commerce:pricing-core/pricing-core@1.0.0` | Published pricing reads/operations that are not the pricing-contributor callback itself. |
+| `better-commerce:inventory/inventory@1.0.0` | Published inventory operations required by plugins; no direct arbitrary mutation contract. |
+| `better-commerce:orders/orders@1.0.0` | Published order/purchase operations safe for plugin use. |
+| `better-commerce:customers/customers@1.0.0` | Published customer operations when that context exists. |
 
 Core-domain host packages are introduced only when a real plugin needs the operation. Direct core SQL reads remain allowed for trusted V1, but domain APIs are preferred and are mandatory for canonical core state mutation.
 
@@ -36,26 +37,43 @@ Outbound networking and clocks use standard WASI packages/capabilities rather th
 
 | Package | Interface purpose |
 | --- | --- |
-| `better-commerce:plugin-lifecycle@1.0.0` | `initialize`, best-effort `shutdown`, `health`, `validate-config`, `config-changed`. |
-| `better-commerce:plugin-http@1.0.0` | Dispatch plugin-owned API/public routes using stable request/response DTOs and scoped body/file references. |
-| `better-commerce:plugin-events@1.0.0` | Handle post-commit BC events with stable event ID and retry classification. |
-| `better-commerce:plugin-jobs@1.0.0` | Execute named durable job handlers; report structured success/failure/result. |
-| `better-commerce:plugin-cli@1.0.0` | Execute descriptor-declared plugin CLI commands with parsed typed args and structured output. |
+| `better-commerce:plugin-lifecycle/lifecycle@1.0.0` | `initialize`, best-effort `shutdown`, `health`, `validate-config`, `config-changed`. |
+| `better-commerce:plugin-http/handler@1.0.0` | Dispatch plugin-owned API/public routes using stable request/response DTOs and scoped body/file references. |
+| `better-commerce:plugin-events/consumer@1.0.0` | Handle post-commit BC events with stable event ID and retry classification. |
+| `better-commerce:plugin-jobs/handler@1.0.0` | Execute named durable job handlers; report structured success/failure/result. |
+| `better-commerce:plugin-cli/command@1.0.0` | Execute descriptor-declared plugin CLI commands with parsed typed args and structured output. |
 
 A plugin exports only the interfaces it actually implements. Backend-less/UI-only plugins export none.
+
+### Descriptor/component semantic validation
+
+Package validation checks more than string equality between declared and compiled imports/exports:
+
+| Descriptor declaration | Required component export |
+| --- | --- |
+| any `backend.wasm` | `better-commerce:plugin-lifecycle/lifecycle@1.0.0` |
+| `routes` | `better-commerce:plugin-http/handler@1.0.0` |
+| `jobs.definitions` or schedules that execute plugin jobs | `better-commerce:plugin-jobs/handler@1.0.0` |
+| `events.subscriptions` | `better-commerce:plugin-events/consumer@1.0.0` |
+| `cli.commands` | `better-commerce:plugin-cli/command@1.0.0` |
+| payment extension | `better-commerce:payments/provider@1.0.0` |
+| pricing extension | `better-commerce:pricing/contributor@1.0.0` |
+| other commerce extension | that extension's exact qualified export |
+
+Declaring a backend capability without its required export is a package-validation error. Exporting additional BC-defined interfaces not declared by the descriptor is also rejected so runtime registration cannot drift from operator-visible package metadata.
 
 ## Commerce extension exports
 
 | Package | Cardinality | Responsibility |
 | --- | --- | --- |
-| `better-commerce:payments@1.0.0` | single-provider per configured payment provider/method selection | Structured methods, create/resolve provider operation, callback verification/mapping. BC owns canonical payment/purchase state. |
-| `better-commerce:pricing@1.0.0` | multi-contributor | Structured adjustments at explicit BC checkpoints. BC owns final arithmetic/persistence/requote. |
-| `better-commerce:shipping@1.0.0` | single-provider or multi-contributor as contract sub-interface defines | Structured rates/eligibility/provider operations. |
-| `better-commerce:checkout@1.0.0` | multi-contributor | Structured checkout fields/validation; no arbitrary checkout HTML injection. |
-| `better-commerce:storefront-metadata@1.0.0` | multi-contributor | Title/meta/canonical/robots/OG/Twitter/JSON-LD/alternate contributions. |
-| `better-commerce:storefront-routing@1.0.0` | multi-contributor with deterministic conflict handling | Structured redirects only; no arbitrary core storefront route ownership. |
-| `better-commerce:sitemap@1.0.0` | multi-contributor | Structured sitemap entries. |
-| `better-commerce:robots@1.0.0` | multi-contributor | Structured robots additions; BC renders final file. |
+| `better-commerce:payments/provider@1.0.0` | single-provider per configured payment provider/method selection | Structured methods, create/resolve provider operation, callback verification/mapping. BC owns canonical payment/purchase state. |
+| `better-commerce:pricing/contributor@1.0.0` | multi-contributor | Structured adjustments at explicit BC checkpoints. BC owns final arithmetic/persistence/requote. |
+| `better-commerce:shipping/shipping@1.0.0` | single-provider or multi-contributor as contract sub-interface defines | Structured rates/eligibility/provider operations. |
+| `better-commerce:checkout/contributor@1.0.0` | multi-contributor | Structured checkout fields/validation; no arbitrary checkout HTML injection. |
+| `better-commerce:storefront-metadata/contributor@1.0.0` | multi-contributor | Title/meta/canonical/robots/OG/Twitter/JSON-LD/alternate contributions. |
+| `better-commerce:storefront-routing/contributor@1.0.0` | multi-contributor with deterministic conflict handling | Structured redirects only; no arbitrary core storefront route ownership. |
+| `better-commerce:sitemap/contributor@1.0.0` | multi-contributor | Structured sitemap entries. |
+| `better-commerce:robots/contributor@1.0.0` | multi-contributor | Structured robots additions; BC renders final file. |
 
 Do not collapse these into a giant `plugin-api-v1` interface. Independent versioning limits blast radius.
 
@@ -103,4 +121,4 @@ validate_config(candidate-config) -> validation-result
 config_changed() -> result
 ```
 
-`initialize` may use config/DB/logging/network but must be bounded by the global invocation timeout and must not start autonomous infinite background work.
+`validate_config(candidate-config)` is callable on a fresh transient component instance before `initialize()` and receives the candidate values directly, so missing stored config does not prevent bootstrap validation. `initialize` may use config/DB/logging/network but must be bounded by the global invocation timeout and must not start autonomous infinite background work.

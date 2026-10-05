@@ -10,7 +10,7 @@ Deliver:
 - plugin ID/SemVer/BC-range parsing;
 - `plugin.yaml` parser + semantic validator;
 - ZIP/path/package-size/digest validation;
-- component import/export inspection and descriptor-match validation;
+- component import/export inspection, exact qualified WIT reference validation and descriptor/component semantic validation matrix;
 - contract/breaking-change CI for WIT.
 
 Exit proof: valid minimal component package passes; malformed/traversal/incompatible/WIT-drift packages fail deterministically.
@@ -95,8 +95,8 @@ Deliver:
 - retry/backoff/dead-letter/manual retry;
 - TTL/cancel/progress/result/simple chains;
 - static schedule reconciliation and missed-run-once behavior;
-- existing transactional outbox → plugin event adapter;
-- per-aggregate ordering and independent aggregate progress;
+- existing transactional outbox → `EventDelivery` adapter that durably/idempotently fans out plugin-delivery rows before acknowledging core outbox acceptance;
+- downstream WASM event worker with per-plugin/per-aggregate ordering, retry/dead-letter and independent aggregate/plugin progress;
 - disabled-plugin queue retention and obsolete subscription handling.
 
 Exit proof: crash/restart and duplicate-side-effect fixtures prove at-least-once/idempotency/order semantics.
