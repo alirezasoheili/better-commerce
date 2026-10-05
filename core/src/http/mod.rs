@@ -1,4 +1,15 @@
+mod assets;
 mod routes;
+mod security;
+mod wire;
+
+pub use assets::FrontendAssets;
+pub use security::{
+    CredentialTransport, HttpConfigurationError, HttpRuntime, SecretJson, boundary_layer,
+};
+pub use wire::{
+    ApiError, DecimalString, ListQuery, ListResponse, OpaqueId, Quantity, RequestId, StrictJson,
+};
 
 #[cfg(test)]
 use crate::{
@@ -6,7 +17,7 @@ use crate::{
     manifest::{parse_and_validate, supported_release_metadata},
 };
 
-pub use routes::{router, router_with_readiness};
+pub use routes::{router, router_with_http, router_with_readiness};
 
 #[cfg(test)]
 fn test_composition() -> Composition {

@@ -5,3 +5,4 @@ pub mod dispatcher;
 pub mod http;
 pub mod manifest;
 pub mod reconcile;
+mod secrets;

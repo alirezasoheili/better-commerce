@@ -24,6 +24,11 @@ $previousUrl = $env:BC_TEST_ADMIN_DATABASE_URL
 try {
     & $initdb -D $data -U postgres --auth=trust --no-instructions | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'initdb failed' }
+    # Only operations uses trust. Scoped identities must verify passwords so the
+    # credential-preservation proof is meaningful on native PostgreSQL as in CI.
+    $hbaPath = Join-Path $data 'pg_hba.conf'
+    $hba = Get-Content -LiteralPath $hbaPath -Raw
+    Set-Content -LiteralPath $hbaPath -Value ("host all postgres 127.0.0.1/32 trust`nhost all all 127.0.0.1/32 scram-sha-256`n" + $hba) -Encoding utf8
     & $pgCtl -D $data -l (Join-Path $testRoot 'postgres.log') -o "-h 127.0.0.1 -p $port" -w start
     if ($LASTEXITCODE -ne 0) { throw 'pg_ctl start failed' }
     $started = $true

@@ -134,3 +134,52 @@ jobs:
             fi
           done
           echo "M0 architecture proof passed"
+
+  frontend:
+    name: Production frontends and live browser boundary
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test_only_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 1s
+          --health-timeout 1s
+          --health-retries 30
+    env:
+      BC_TEST_ADMIN_DATABASE_URL: postgres://postgres:test_only_password@127.0.0.1:5432/postgres
+      ASTRO_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: |
+            frontend/storefront/package-lock.json
+            frontend/admin/package-lock.json
+            frontend/e2e/package-lock.json
+      - run: npm install --global npm@11.18.0
+      - name: Storefront pinned install, typecheck, arithmetic tests and build
+        run: |
+          npm ci --prefix frontend/storefront
+          npm run typecheck --prefix frontend/storefront
+          npm run test --prefix frontend/storefront
+          npm run build --prefix frontend/storefront
+      - name: Admin pinned install, typecheck, arithmetic tests and build
+        run: |
+          npm ci --prefix frontend/admin
+          npm run typecheck --prefix frontend/admin
+          npm run test --prefix frontend/admin
+          npm run build --prefix frontend/admin
+      - name: Live production browser check against Rust and PostgreSQL
+        run: |
+          npm ci --prefix frontend/e2e
+          npx --prefix frontend/e2e playwright install --with-deps chromium
+          cargo test -p better-commerce-core --test browser_live --locked -- --ignored --nocapture

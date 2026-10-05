@@ -20,6 +20,7 @@ SECRET_ENV = (
     "BC_SMOKE_EXAMPLE_PASSWORD",
     "BC_SMOKE_DISPATCHER_PASSWORD",
     "BC_SMOKE_READINESS_PASSWORD",
+    "BC_SMOKE_ADMIN_TOKEN",
 )
 
 
@@ -225,7 +226,8 @@ def write_manifest(path, installation_id, database, port, label=None):
         + "    operations_password: { env: BC_SMOKE_OPERATIONS_PASSWORD }\n"
         + "    example_password: { env: BC_SMOKE_EXAMPLE_PASSWORD }\n"
         + "    dispatcher_password: { env: BC_SMOKE_DISPATCHER_PASSWORD }\n"
-        + "    readiness_password: { env: BC_SMOKE_READINESS_PASSWORD }\n",
+        + "    readiness_password: { env: BC_SMOKE_READINESS_PASSWORD }\n"
+        + f"http:\n  public_origin: http://127.0.0.1:{port}\n  admin_token: {{ env: BC_SMOKE_ADMIN_TOKEN }}\n",
         encoding="utf-8",
     )
 
@@ -249,7 +251,7 @@ def main():
         env = os.environ.copy()
         secret_values = {}
         for name in SECRET_ENV:
-            value = "TOP_SECRET_SHOULD_NEVER_APPEAR_" + secrets.token_urlsafe(24)
+            value = secrets.token_urlsafe(32) if name == "BC_SMOKE_ADMIN_TOKEN" else "TOP_SECRET_SHOULD_NEVER_APPEAR_" + secrets.token_urlsafe(24)
             secret_values[value] = name
             env[name] = value
         env.update(
@@ -258,6 +260,7 @@ def main():
                 "BC_EXAMPLE_PASSWORD": env["BC_SMOKE_EXAMPLE_PASSWORD"],
                 "BC_DISPATCHER_PASSWORD": env["BC_SMOKE_DISPATCHER_PASSWORD"],
                 "BC_READINESS_PASSWORD": env["BC_SMOKE_READINESS_PASSWORD"],
+                "BC_ADMIN_TOKEN": env["BC_SMOKE_ADMIN_TOKEN"],
                 "BC_DATABASE_NAME": database,
                 "BC_HTTP_PORT": str(port),
                 "BC_MANIFEST_HOST_PATH": str(manifest).replace("\\", "/"),
@@ -280,6 +283,15 @@ def main():
                 raise RuntimeError("bc did not report first-install readiness")
             ready(port)
             print("Compose first-install readiness passed.")
+            for path in ("/", "/admin"):
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as response:
+                    if response.status != 200 or "unsafe-inline" in response.headers.get("Content-Security-Policy", ""):
+                        raise RuntimeError("production frontend/CSP was not delivered by Compose")
+            admin_request = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1/admin/status", headers={"Authorization": "Bearer " + env["BC_SMOKE_ADMIN_TOKEN"]})
+            with urllib.request.urlopen(admin_request, timeout=10) as response:
+                if response.headers.get("Cache-Control") != "no-store" or json.load(response) != {"status": "available", "capabilities": []}:
+                    raise RuntimeError("Compose admin authority/cache boundary failed")
+            print("Compose same-origin production assets and admin authority passed.")
 
             record_id = secrets.randbelow(800_000_000) + 100_000_000
             record_label = f"repeat-smoke-{unique}"

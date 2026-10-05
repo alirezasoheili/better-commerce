@@ -96,6 +96,19 @@ where
     compose_modules(validated.clone())
         .map_err(|error| ReconcileError::new("validate", error.to_string()))?;
 
+    let admin_token = if let Some(configuration) = &validated.http {
+        let token = ResolvedSecrets::resolve(
+            &configuration.admin_token,
+            manifest_path.parent().unwrap_or(Path::new(".")),
+            &get_env,
+        )?;
+        crate::http::HttpRuntime::from_resolved_token(configuration, &token)
+            .map_err(|_| ReconcileError::new("validate", "HTTP/admin configuration is invalid"))?;
+        Some(token)
+    } else {
+        None
+    };
+
     let local = validated.local.ok_or_else(|| {
         ReconcileError::new(
             "validate",
@@ -142,6 +155,9 @@ where
         &database_name,
     );
     let mut environment = BTreeMap::new();
+    if let Some(value) = admin_token {
+        environment.insert("BC_ADMIN_TOKEN".to_owned(), value);
+    }
     environment.insert(
         "BC_INSTALLATION_ID".to_owned(),
         local.installation_id.clone(),
@@ -167,7 +183,11 @@ where
     environment.insert("DISPATCHER_DATABASE_URL".to_owned(), dispatcher_url);
     environment.insert("READINESS_DATABASE_URL".to_owned(), readiness_url);
 
-    let context = ComposeContext {
+    let loopback_ingress = validated
+        .http
+        .as_ref()
+        .is_some_and(|http| http.public_origin.starts_with("http://"));
+    let mut context = ComposeContext {
         file: compose_file,
         project,
         environment,
@@ -177,6 +197,32 @@ where
         "apply PostgreSQL",
         &["up", "--detach", "--build", "postgres"],
     )?;
+    if loopback_ingress {
+        // Docker NAT changes the socket peer even when the published port is loopback-only.
+        let output = Command::new("docker")
+            .args([
+                "network",
+                "inspect",
+                "--format",
+                "{{(index .IPAM.Config 0).Gateway}}",
+                &format!("{}_default", context.project),
+            ])
+            .output()
+            .map_err(|_| ReconcileError::new("plan", "could not inspect local Compose ingress"))?;
+        let gateway = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| ReconcileError::new("plan", "local Compose ingress is unavailable"))?;
+        if !output.status.success() {
+            return Err(ReconcileError::new(
+                "plan",
+                "local Compose ingress is unavailable",
+            ));
+        }
+        context
+            .environment
+            .insert("BC_HTTP_LOOPBACK_PROXY_IP".into(), gateway.to_string());
+    }
     run_compose(
         &context,
         "run owned migrations",
@@ -214,42 +260,8 @@ impl ResolvedSecrets {
     where
         F: Fn(&str) -> Result<String, std::env::VarError>,
     {
-        let value = match reference {
-            SecretReference::Environment { env } => {
-                if env.is_empty() || !env.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-                    return Err(ReconcileError::new(
-                        "validate",
-                        "secret environment reference is invalid",
-                    ));
-                }
-                get_env(env).map_err(|_| {
-                    ReconcileError::new(
-                        "validate",
-                        "required secret environment variable is unavailable",
-                    )
-                })?
-            }
-            SecretReference::File { file } => {
-                let path = if file.is_absolute() {
-                    file.clone()
-                } else {
-                    manifest_dir.join(file)
-                };
-                std::fs::read_to_string(path)
-                    .map_err(|_| {
-                        ReconcileError::new("validate", "required secret file is unavailable")
-                    })?
-                    .trim_end_matches(['\r', '\n'])
-                    .to_owned()
-            }
-        };
-        if value.is_empty() {
-            return Err(ReconcileError::new(
-                "validate",
-                "resolved secret must not be empty",
-            ));
-        }
-        Ok(value)
+        crate::secrets::resolve(reference, manifest_dir, get_env)
+            .map_err(|message| ReconcileError::new("validate", message))
     }
 }
 
@@ -377,7 +389,10 @@ fn redacted_diagnostics(
     let mut sensitive_values: Vec<_> = environment
         .iter()
         .filter(|(key, value)| {
-            !value.is_empty() && (key.ends_with("_PASSWORD") || key.ends_with("_DATABASE_URL"))
+            !value.is_empty()
+                && (key.ends_with("_PASSWORD")
+                    || key.ends_with("_DATABASE_URL")
+                    || key.ends_with("_TOKEN"))
         })
         .map(|(_, value)| value.as_str())
         .collect();
@@ -594,14 +609,18 @@ mod tests {
 
         let secret = "TOP_SECRET_SHOULD_NEVER_APPEAR_FAILURE";
         let url = format!("postgres://postgres:{secret}@postgres:5432/bc_demo");
-        let stderr = format!("connection failed using {secret} and {url}").into_bytes();
+        let admin_token = "ADMIN_TOKEN_SHOULD_NEVER_APPEAR_FAILURE";
+        let stderr =
+            format!("connection failed using {secret} and {url} and {admin_token}").into_bytes();
         let environment = BTreeMap::from([
             ("BC_OPERATIONS_PASSWORD".to_owned(), secret.to_owned()),
             ("OPERATIONS_DATABASE_URL".to_owned(), url),
+            ("BC_ADMIN_TOKEN".to_owned(), admin_token.to_owned()),
         ]);
         let diagnostics = super::redacted_diagnostics(&[], &stderr, &environment);
         assert!(diagnostics.contains("connection failed"));
         assert!(!diagnostics.contains(secret));
         assert!(!diagnostics.contains("postgres://"));
+        assert!(!diagnostics.contains(admin_token));
     }
 }

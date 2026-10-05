@@ -21,6 +21,17 @@ pub struct Manifest {
     pub modules: BTreeMap<String, ModuleInstallation>,
     #[serde(default)]
     pub local: Option<LocalDeployment>,
+    #[serde(default)]
+    pub http: Option<HttpConfiguration>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpConfiguration {
+    pub public_origin: String,
+    pub admin_token: SecretReference,
+    #[serde(default)]
+    pub trusted_proxy_ip: Option<std::net::IpAddr>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -75,6 +86,7 @@ pub struct ValidatedManifest {
     pub deployment_mode: DeploymentMode,
     pub modules: BTreeMap<String, ModuleInstallation>,
     pub local: Option<LocalDeployment>,
+    pub http: Option<HttpConfiguration>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -200,6 +212,7 @@ pub fn validate_manifest(
         deployment_mode: manifest.deployment_mode,
         modules: manifest.modules,
         local: manifest.local,
+        http: manifest.http,
     })
 }
 
